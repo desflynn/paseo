@@ -3662,6 +3662,11 @@ class OpenCodeAgentSession implements AgentSession {
     // busy. That message is the earliest unambiguous boundary for a plugin-
     // initiated parent turn; session metadata and assistant echoes are not.
     if (event.type === "message.updated" && event.properties.info.role === "user") {
+      // OpenCode stamps filesystem-snapshot diffs onto the user message after the
+      // turn goes idle. That is metadata about work already done, not a new prompt.
+      if (event.properties.info.summary?.diffs) {
+        return false;
+      }
       if (this.emittedUserMessageIds.has(event.properties.info.id)) {
         return false;
       }
