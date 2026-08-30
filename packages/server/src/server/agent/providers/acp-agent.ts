@@ -3069,7 +3069,17 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private handleUsageUpdate(update: UsageUpdate): void {
-    void update;
+    // getpaseo/paseo#1390: ACP agents report window size + used tokens here.
+    // Push them as a partial usage event; agent-manager merges into lastUsage
+    // so the composer context meter updates live during long turns.
+    this.pushEvent({
+      type: "usage_updated",
+      provider: this.provider,
+      usage: {
+        contextWindowUsedTokens: update.used,
+        contextWindowMaxTokens: update.size,
+      },
+    });
   }
 
   private handlePromptResponse(response: PromptResponse, turnId: string): void {
