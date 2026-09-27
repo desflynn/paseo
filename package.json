@@ -156,6 +156,7 @@
     "fsevents@2.3.3": true,
     "fsevents@2.3.2": true,
     "lefthook@2.1.6": true,
+    "msgpackr-extract@3.0.4": true,
     "sharp@0.34.5": true,
     "unrs-resolver@1.11.1": true,
     "workerd@1.20260507.1": true,
