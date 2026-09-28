@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node build.mjs && node --test spike.test.ts shared/extensions.test.ts shared/markup-contract.test.ts shared/golden-corpus.test.ts shared/tex-unicode.test.ts"
+    "test": "node build.mjs && node --test spike.test.ts shared/extensions.test.ts shared/markup-contract.test.ts shared/golden-corpus.test.ts shared/tex-unicode.test.ts client/appearance.test.ts client/vendor/components/markdown-text.test.ts"
   },
   "dependencies": {
     "@getpaseo/highlight": "file:../../../packages/highlight",
