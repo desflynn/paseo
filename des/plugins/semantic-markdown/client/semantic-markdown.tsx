@@ -711,29 +711,18 @@ class PaneHandlerProbe extends Component<{ onFound: (search: PaneHandlerSearch) 
   }
 }
 
-async function openWorkspaceFile(
-  serverId: string,
-  agentId: string,
-  href: string,
-  click: number,
-  report: (line: string) => void,
-) {
+async function openWorkspaceFile(serverId: string, agentId: string, href: string, click: number) {
   try {
     if (isWeb) {
       // Desktop: the page address already names the server and workspace. The agent
       // lookup below never settled on desktop (2026-09-28), so skip it here.
       const route = workspaceFileRouteFromPath(window.location.pathname, href, click);
       if (!route) {
-        report(`link: not on a workspace page (${window.location.pathname.slice(0, 40)})`);
+        console.warn("[semantic-markdown] file link: not on a workspace page", href);
         return;
       }
       window.history.pushState(null, "", route);
       window.dispatchEvent(new PopStateEvent("popstate"));
-      setTimeout(() => {
-        report(
-          `link sent ${route.slice(0, 60)}… · now at ${window.location.pathname}${window.location.search.slice(0, 40)}`,
-        );
-      }, 500);
       return;
     }
     const agent = getPaseoClient(serverId).agents.ref(agentId);
@@ -742,24 +731,18 @@ async function openWorkspaceFile(
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000)),
     ]);
     if (!refreshed) {
-      report("link: agent lookup timed out after 3 s");
+      console.warn("[semantic-markdown] file link: agent lookup timed out", href);
       return;
     }
     const input = { serverId, workspaceId: agent.workspaceId ?? undefined, href };
     const route = workspaceFileRoute(input);
     if (!route) {
       console.warn("[semantic-markdown] no workspace for file link", href);
-      report(`link: no workspace for agent ${agentId}`);
       return;
     }
-    const url = workspaceFileLinkUrl(input, click) ?? "";
-    report(
-      `click ${click}: deep link · workspace ${input.workspaceId} · sending …${url.slice(-24)}`,
-    );
-    await Linking.openURL(url);
+    await Linking.openURL(workspaceFileLinkUrl(input, click) ?? "");
   } catch (error) {
     console.warn("[semantic-markdown] file link failed", href, error);
-    report(`link failed: ${String(error)}`);
   }
 }
 
@@ -801,8 +784,6 @@ export function SemanticMarkdown({
     ].join();
   }, [markdownParser, streamingMarkdownParser, item.data.text, prepared.cardDefinitions]);
   const rules = useMemo(() => createRendererRules(theme, dark), [theme, dark]);
-  // Debug: last path-link outcome, shown under the message until links are proven.
-  const [linkDebug, setLinkDebug] = useState<string | null>(null);
   const paneSearchRef = useRef<PaneHandlerSearch>({ handler: null, walked: 0 });
   const rememberPaneHandler = useCallback((search: PaneHandlerSearch) => {
     paneSearchRef.current = search;
@@ -817,16 +798,15 @@ export function SemanticMarkdown({
       if (pane) {
         try {
           pane.openFileInWorkspace({ location: { path }, disposition: "preferred" });
-          setLinkDebug(`click ${click}: pane handler`);
           return false;
         } catch (error) {
           console.warn("[semantic-markdown] pane handler failed", error);
         }
       }
-      setLinkDebug(
-        `click ${click}: no pane handler (walked ${paneSearchRef.current.walked}), deep link`,
+      console.warn(
+        `[semantic-markdown] no pane handler (walked ${paneSearchRef.current.walked}), deep link`,
       );
-      void openWorkspaceFile(host.id, agentId, href, click, setLinkDebug);
+      void openWorkspaceFile(host.id, agentId, href, click);
       return false;
     },
     [host.id, agentId],
@@ -847,11 +827,6 @@ export function SemanticMarkdown({
             onLinkPress={handleLinkPress}
           />
         ))}
-        {linkDebug ? (
-          <Text selectable style={{ color: pluginTheme.colors.foregroundMuted, fontSize: 11 }}>
-            {linkDebug}
-          </Text>
-        ) : null}
       </View>
     </LinkPressContext.Provider>
   );
