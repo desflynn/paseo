@@ -61,6 +61,7 @@ inline code, and plain prose with Paseo's renderer.
 - Content is parsed as ordinary Markdown. Tags do not nest: if the content contains
   another semantic tag, the outer tag stays literal and the inner tag parses.
   Pairs must close on the same line.
+- While a pair streams, hide its opener and unfinished content until the closing tag arrives.
 - The line-start `{type} text` form stays the block treatment, unchanged.
 - Option separators such as `or` are prose guidance. The parser has no separator
   behaviour and leaves them as plain text.
