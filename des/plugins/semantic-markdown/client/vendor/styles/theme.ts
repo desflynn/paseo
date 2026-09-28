@@ -1,0 +1,120 @@
+import { linkColorFor } from "../../app-settings.ts";
+import { Platform } from "react-native";
+import type { PluginTheme } from "@getpaseo/plugin";
+
+// Scale values copied from packages/app/src/styles/theme.ts at v0.9.2 (tag ==
+// main for this closure). Inlined so vendored style code compiles without the
+// app's unistyles theme machinery. Do not "fix" these to look nicer — parity
+// means matching the app's numbers exactly.
+export const FONT_SIZE = {
+  code: 12,
+  content: 15,
+  sm: 12,
+  base: 14,
+  lg: 16,
+  xl: 18,
+  "2xl": 20,
+  "3xl": 22,
+  "4xl": 26,
+} as const;
+
+export const SPACING = {
+  0: 0,
+  0.5: 2,
+  1: 4,
+  1.5: 6,
+  2: 8,
+  3: 12,
+  4: 16,
+  6: 24,
+  8: 32,
+  12: 48,
+  16: 64,
+  20: 80,
+  24: 96,
+  32: 128,
+} as const;
+
+export const BORDER_RADIUS = {
+  none: 0,
+  sm: 2,
+  base: 4,
+  md: 6,
+  lg: 8,
+  xl: 12,
+  "2xl": 16,
+  full: 9999,
+} as const;
+
+export const FONT_WEIGHT = {
+  normal: "normal" as const,
+  medium: "500" as const,
+  semibold: "600" as const,
+  bold: "bold" as const,
+};
+
+const DEFAULT_MONO_FONT_STACK = Platform.select({
+  ios: "ui-monospace",
+  default: "monospace",
+  web: "SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+});
+
+// The subset of the app's 863-LOC Theme that the vendored markdown closure
+// actually consumes. Structurally compatible: vendored files typecheck against
+// this and only touch these fields.
+export interface Theme {
+  colors: {
+    foreground: string;
+    foregroundMuted: string;
+    accentBright: string;
+    surface0: string;
+    surface1: string;
+    surface2: string;
+    border: string;
+  };
+  fontSize: Record<keyof typeof FONT_SIZE, number>;
+  fontWeight: typeof FONT_WEIGHT;
+  fontFamily: { ui: string; mono: string };
+  spacing: typeof SPACING;
+  borderRadius: typeof BORDER_RADIUS;
+}
+
+// PluginTheme lacks the app's accentBright/syntax tokens; accent is the
+// closest host-provided value. Visual parity is bounded by the SDK token set
+// (VENDOR_PLAN risk 5).
+// Relative luminance of a surface color, for picking light/dark palettes
+// (syntax tokens, semantic kinds) when the SDK only exposes raw hex tokens.
+// Unparseable values read as dark, matching the dark-app default.
+export function isDarkSurface(surfaceHex: string): boolean {
+  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(surfaceHex.trim());
+  if (!match) return true;
+  let hex = match[1];
+  if (hex.length === 3) hex = hex.replace(/./g, (char) => char + char);
+  const value = Number.parseInt(hex, 16);
+  return (
+    (0.2126 * ((value >> 16) & 255) + 0.7152 * ((value >> 8) & 255) + 0.0722 * (value & 255)) /
+      255 <
+    0.5
+  );
+}
+
+export function themeFromPlugin(pluginTheme: PluginTheme, appTheme: string | null): Theme {
+  const c = pluginTheme.colors;
+  const scheme = isDarkSurface(c.surface0) ? "dark" : "light";
+  return {
+    colors: {
+      foreground: c.foreground,
+      foregroundMuted: c.foregroundMuted,
+      accentBright: linkColorFor(appTheme, scheme, c.accent),
+      surface0: c.surface0,
+      surface1: c.surface1,
+      surface2: c.surface2,
+      border: c.border,
+    },
+    fontSize: FONT_SIZE,
+    fontWeight: FONT_WEIGHT,
+    fontFamily: { ui: "System", mono: DEFAULT_MONO_FONT_STACK ?? "monospace" },
+    spacing: SPACING,
+    borderRadius: BORDER_RADIUS,
+  };
+}
