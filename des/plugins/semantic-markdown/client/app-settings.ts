@@ -20,16 +20,17 @@ function nativeStorage(): { multiGet: MultiGet } | null {
   return null;
 }
 
-function readRaw(): Promise<string | null> {
+/** Read one AsyncStorage key the app wrote. Read-only. */
+export function readRaw(key = APP_SETTINGS_KEY): Promise<string | null> {
   if (Platform.OS === "web") {
     const storage = (globalThis as { localStorage?: { getItem(key: string): string | null } })
       .localStorage;
-    return Promise.resolve(storage?.getItem(APP_SETTINGS_KEY) ?? null);
+    return Promise.resolve(storage?.getItem(key) ?? null);
   }
   const storage = nativeStorage();
   if (!storage) return Promise.reject(new Error("AsyncStorage native module not found"));
   return new Promise((resolve, reject) =>
-    storage.multiGet([APP_SETTINGS_KEY], (errors, result) => {
+    storage.multiGet([key], (errors, result) => {
       if (errors) {
         reject(new Error(String(errors)));
         return;

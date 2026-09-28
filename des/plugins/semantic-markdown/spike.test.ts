@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import vm from "node:vm";
 import { build } from "esbuild";
+import { createAssistantMarkdownParser } from "./client/vendor/utils/assistant-markdown-parser.ts";
 import { hasSemanticSourceSyntax } from "./shared/source-syntax.ts";
 import {
+  applySemanticRules,
   createSemanticMarkdownParser,
   parseSemanticMarkdown,
   parseSpike,
@@ -538,6 +540,28 @@ test("incomplete and unknown markers stay native", () => {
   assert.equal(parseSpike("{done"), undefined);
   assert.equal(parseSpike("=={warning}no close"), undefined);
   assert.equal(parseSpike("{nope} text"), undefined);
+});
+
+test("streaming paired tags wait for their closing tag", () => {
+  const partial = "Before {done}==**Build complete.**";
+  assert.equal(parseSpike(partial), undefined);
+  assert.deepEqual(parseSpike(partial, true), { text: partial });
+
+  const parser = applySemanticRules(createAssistantMarkdownParser({ streaming: true }), true);
+  const partialChildren = collectInlineChildren(parser.parse(partial, {}));
+  assert.equal(
+    partialChildren
+      .filter((token) => token.type === "text")
+      .map((token) => token.content)
+      .join(""),
+    "Before ",
+  );
+  assert.ok(partialChildren.every((token) => !token.content.includes("{done}")));
+
+  const complete = "Before {done}==**Build complete.**=={/done}";
+  const completeChildren = collectInlineChildren(parser.parse(complete, {}));
+  assert.ok(completeChildren.some((token) => token.type === "semantic_highlight_open"));
+  assert.ok(completeChildren.some((token) => token.type === "strong_open"));
 });
 
 test("desktop can load the native WebView adapter without native commands", async () => {

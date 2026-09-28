@@ -85,11 +85,11 @@ function contributeMain(client: PluginClientContext, mainApi: Main) {
   client.addTimelineTransformer({
     id: "semantic-markdown",
     query: { itemType: "assistant_message" },
-    transform: ({ item }) => {
+    transform: ({ item, phase }) => {
       // Debug until stable: a parser failure leaves the message on Paseo's renderer.
       let data;
       try {
-        data = parseSpike(item.text);
+        data = parseSpike(item.text, phase === "streaming");
       } catch (error) {
         console.warn("[semantic-markdown] parse failed", error);
         if (!PLUGIN_DEBUG) return;

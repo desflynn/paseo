@@ -52,6 +52,19 @@ function hasSemanticPair(text: string): boolean {
   return false;
 }
 
+export function hasIncompleteSemanticPair(text: string): boolean {
+  var visible = withoutCode(text);
+  var opener = new RegExp("\\{(" + KINDS + ")\\}", "g");
+  for (var match = opener.exec(visible); match; match = opener.exec(visible)) {
+    if (isEscaped(visible, match.index)) continue;
+    // `=={kind}text==` is the standalone highlight form, not a paired tag.
+    if (match.index >= 2 && visible.slice(match.index - 2, match.index) === "==") continue;
+    if (visible.indexOf("\n", opener.lastIndex) >= 0) continue;
+    if (findUnescaped(visible, "{/" + match[1] + "}", opener.lastIndex) < 0) return true;
+  }
+  return false;
+}
+
 function hasCardDefinition(text: string): boolean {
   var opener = /\{card:([A-Za-z0-9_-]+)\}/g;
   for (var match = opener.exec(text); match; match = opener.exec(text)) {
