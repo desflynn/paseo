@@ -1,11 +1,13 @@
-import { linkColorFor } from "../../app-settings.ts";
+import { linkColorFor, type StoredAppSettings } from "../../app-settings.ts";
 import { Platform } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 
-// Scale values copied from packages/app/src/styles/theme.ts at v0.9.2 (tag ==
-// main for this closure). Inlined so vendored style code compiles without the
-// app's unistyles theme machinery. Do not "fix" these to look nicer — parity
-// means matching the app's numbers exactly.
+// The authored scale values copied from packages/app/src/styles/theme.ts at
+// v0.9.2 (tag == main for this closure). Inlined so vendored style code compiles
+// without the app's unistyles theme machinery. Do not "fix" these to look nicer:
+// in the app these exact numbers seed the runtime font ramp (apply.ts), so the
+// vendored geometry constants stay authored while themeFromPlugin scales the
+// theme tokens. See scaleFontSize below.
 export const FONT_SIZE = {
   code: 12,
   content: 15,
@@ -53,6 +55,13 @@ export const FONT_WEIGHT = {
   bold: "bold" as const,
 };
 
+// Platform default stacks copied from 0.9.2 packages/app/src/styles/theme.ts.
+const DEFAULT_UI_FONT_STACK = Platform.select({
+  ios: "system-ui",
+  default: "normal",
+  web: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+});
+
 const DEFAULT_MONO_FONT_STACK = Platform.select({
   ios: "ui-monospace",
   default: "monospace",
@@ -98,22 +107,55 @@ export function isDarkSurface(surfaceHex: string): boolean {
   );
 }
 
-export function themeFromPlugin(pluginTheme: PluginTheme, appTheme: string | null): Theme {
+/**
+ * The app's font-size ramp (packages/app/src/appearance/apply.ts): UI tiers
+ * scale proportionally from the authored `FONT_SIZE` by uiBaseSize / base, while
+ * `content` and `code` are absolute — separate semantic axes, never scaled.
+ * Deriving from the authored ramp (not a live, already-scaled value) keeps
+ * repeated derivations idempotent.
+ */
+export function scaleFontSize(
+  uiBaseSize: number,
+  contentSize: number,
+  codeSize: number,
+): Theme["fontSize"] {
+  const r = uiBaseSize / FONT_SIZE.base;
+  return {
+    sm: Math.round(FONT_SIZE.sm * r),
+    base: Math.round(FONT_SIZE.base * r),
+    lg: Math.round(FONT_SIZE.lg * r),
+    xl: Math.round(FONT_SIZE.xl * r),
+    "2xl": Math.round(FONT_SIZE["2xl"] * r),
+    "3xl": Math.round(FONT_SIZE["3xl"] * r),
+    "4xl": Math.round(FONT_SIZE["4xl"] * r),
+    content: contentSize,
+    code: codeSize,
+  };
+}
+
+export function themeFromPlugin(pluginTheme: PluginTheme, settings: StoredAppSettings): Theme {
   const c = pluginTheme.colors;
   const scheme = isDarkSurface(c.surface0) ? "dark" : "light";
   return {
     colors: {
       foreground: c.foreground,
       foregroundMuted: c.foregroundMuted,
-      accentBright: linkColorFor(appTheme, scheme, c.accent),
+      accentBright: linkColorFor(settings.theme, scheme, c.accent),
       surface0: c.surface0,
       surface1: c.surface1,
       surface2: c.surface2,
       border: c.border,
     },
-    fontSize: FONT_SIZE,
+    fontSize: scaleFontSize(
+      settings.uiBaseFontSize,
+      settings.contentFontSize,
+      settings.codeFontSize,
+    ),
     fontWeight: FONT_WEIGHT,
-    fontFamily: { ui: "System", mono: DEFAULT_MONO_FONT_STACK ?? "monospace" },
+    fontFamily: {
+      ui: (settings.uiFontFamily.trim() || DEFAULT_UI_FONT_STACK) ?? "system-ui",
+      mono: (settings.monoFontFamily.trim() || DEFAULT_MONO_FONT_STACK) ?? "monospace",
+    },
     spacing: SPACING,
     borderRadius: BORDER_RADIUS,
   };

@@ -48,7 +48,11 @@ export function MarkdownTextSpan({
 
   return (
     <Text
-      selectable={!isWeb}
+      // react-native-web maps selectable={false} to user-select:none applied
+      // AFTER style, which would defeat the markdown styles' userSelect:text
+      // and clamp drag selection per span. Web must omit the prop; native keeps
+      // per-line <Text selectable>.
+      selectable={isWeb ? undefined : true}
       dataSet={dataSet}
       style={style}
       onPress={onPress}

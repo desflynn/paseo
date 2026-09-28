@@ -2,12 +2,13 @@ import type { PluginClientContext, PluginTimelineItemProps } from "@getpaseo/plu
 import * as HostReact from "react";
 import { Text } from "react-native";
 import { z } from "zod";
+import { hasSemanticSourceSyntax } from "./shared/source-syntax.ts";
 
 type Main = import("./client/main.lowered.js").SemanticMarkdownApi;
 
 // Red LOAD/SETUP/PARSE cards keep tagged messages owned by this plugin when it fails.
 // Keep in step with client/debug.tsx.
-var PLUGIN_DEBUG = true;
+var PLUGIN_DEBUG = false;
 
 // Debug until stable (Des, 2026-09-27): load the lowered bundle inside try/catch so a
 // module-evaluation failure shows on the card instead of failing the whole plugin.
@@ -43,10 +44,6 @@ try {
     Object.getOwnPropertyNames(HostReact).slice(0, 12).join(", ");
   console.warn("[semantic-markdown] load failed", loadError);
 }
-
-// Our syntax only; used to show the load error where the plugin would have rendered.
-var OUR_SYNTAX =
-  /\{(ask|done|deferred|warning|danger|info)\}|==\{|\[!(ask|done|deferred|warning|danger|info)\]|\$|\[\^|<kbd>/;
 
 function LoadErrorCard(props: PluginTimelineItemProps<{ text: string; error?: string }>) {
   var data = props.item.data;
@@ -100,7 +97,7 @@ function contributeMain(client: PluginClientContext, mainApi: Main) {
       }
       if (!data) {
         // Debug until stable: our syntax present but nothing claimed — show why.
-        if (!PLUGIN_DEBUG || !OUR_SYNTAX.test(item.text)) return;
+        if (!PLUGIN_DEBUG || !hasSemanticSourceSyntax(item.text)) return;
         var why;
         try {
           why = diagnoseParse(item.text);
@@ -161,7 +158,8 @@ export default function contribute(client: PluginClientContext) {
   client.addTimelineTransformer({
     id: "semantic-markdown-fallback",
     query: { itemType: "assistant_message" },
-    transform: ({ item }) => (OUR_SYNTAX.test(item.text) ? errorItem(item.text) : undefined),
+    transform: ({ item }) =>
+      hasSemanticSourceSyntax(item.text) ? errorItem(item.text) : undefined,
   });
   return () => {};
 }

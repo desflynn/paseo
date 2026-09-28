@@ -221,6 +221,7 @@ export function createMarkdownStyles(theme: Theme) {
       borderWidth: 1,
       borderColor: theme.colors.border,
       borderRadius: theme.borderRadius.md,
+      backgroundColor: theme.colors.surface0,
       marginVertical: theme.spacing[3],
     },
 
