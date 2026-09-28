@@ -16,9 +16,6 @@ export interface NativeWebViewProps {
   onLoadingFinish?: (event: { nativeEvent: { url: string } }) => void;
   onLoadingError?: (event: { nativeEvent: { description?: string } }) => void;
   onLayout?: (event: { nativeEvent: { layout: { width: number; height: number } } }) => void;
-  hasOnOpenWindowEvent?: boolean;
-  javaScriptCanOpenWindowsAutomatically?: boolean;
-  onOpenWindow?: (event: { nativeEvent: { targetUrl: string } }) => void;
   style?: ViewStyle;
 }
 

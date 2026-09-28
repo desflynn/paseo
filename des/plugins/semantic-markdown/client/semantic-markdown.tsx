@@ -1,7 +1,26 @@
-import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
+import { getPaseoClient, type PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { Pressable, Text, View, type TextStyle, type ViewStyle } from "react-native";
+import {
+  Component,
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Linking, Pressable, Text, View, type TextStyle, type ViewStyle } from "react-native";
+import {
+  findPaneHandler,
+  localFilePath,
+  workspaceFileLinkUrl,
+  workspaceFileRoute,
+  workspaceFileRouteFromPath,
+  type FiberLike,
+  type PaneHandlerSearch,
+} from "../shared/file-link.ts";
+import { isWeb } from "./vendor/constants/platform.ts";
 import type { ASTNode, RenderRules } from "react-native-markdown-display";
 import { setMessageFootnotes } from "../shared/extensions.ts";
 import { texToUnicode } from "../shared/tex-unicode.ts";
@@ -652,13 +671,106 @@ function SemanticCardReference({
       dark={dark}
       rules={rules}
       markdownit={parser}
+      onLinkPress={useContext(LinkPressContext)}
     />
   );
 }
 
+// --- links ---------------------------------------------------------------------
+
+// Paseo's chat renderer opens path links through an app-internal file-link action that
+// plugins cannot reach, and the SDK's openExternalUrl opens http(s) only. Local file links
+// deep-link to the agent's workspace instead (see shared/file-link.ts); every other link
+// returns true and keeps the renderer's default openExternalUrl path.
+const LinkPressContext = createContext<((href: string) => boolean) | undefined>(undefined);
+
+let linkClicks = 0;
+
+// The plugin cannot import Paseo's pane context, but it renders inside the provider.
+// This probe reads the provider value off the fiber chain at mount (see findPaneHandler)
+// and hands it to the press handler, so a path-link tap calls Paseo's own
+// openFileInWorkspace and behaves exactly like the app's chat link.
+class PaneHandlerProbe extends Component<{ onFound: (search: PaneHandlerSearch) => void }> {
+  componentDidMount(): void {
+    let search: PaneHandlerSearch = { handler: null, walked: 0 };
+    try {
+      const internals = this as unknown as {
+        _reactInternals?: FiberLike;
+        _reactInternalFiber?: FiberLike;
+      };
+      const fiber = internals._reactInternals ?? internals._reactInternalFiber;
+      if (fiber) search = findPaneHandler(fiber);
+    } catch (error) {
+      console.warn("[semantic-markdown] pane handler walk failed", error);
+    }
+    this.props.onFound(search);
+  }
+
+  render(): ReactNode {
+    return null;
+  }
+}
+
+async function openWorkspaceFile(
+  serverId: string,
+  agentId: string,
+  href: string,
+  click: number,
+  report: (line: string) => void,
+) {
+  try {
+    if (isWeb) {
+      // Desktop: the page address already names the server and workspace. The agent
+      // lookup below never settled on desktop (2026-09-28), so skip it here.
+      const route = workspaceFileRouteFromPath(window.location.pathname, href, click);
+      if (!route) {
+        report(`link: not on a workspace page (${window.location.pathname.slice(0, 40)})`);
+        return;
+      }
+      window.history.pushState(null, "", route);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      setTimeout(() => {
+        report(
+          `link sent ${route.slice(0, 60)}… · now at ${window.location.pathname}${window.location.search.slice(0, 40)}`,
+        );
+      }, 500);
+      return;
+    }
+    const agent = getPaseoClient(serverId).agents.ref(agentId);
+    const refreshed = await Promise.race([
+      agent.refresh().then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000)),
+    ]);
+    if (!refreshed) {
+      report("link: agent lookup timed out after 3 s");
+      return;
+    }
+    const input = { serverId, workspaceId: agent.workspaceId ?? undefined, href };
+    const route = workspaceFileRoute(input);
+    if (!route) {
+      console.warn("[semantic-markdown] no workspace for file link", href);
+      report(`link: no workspace for agent ${agentId}`);
+      return;
+    }
+    const url = workspaceFileLinkUrl(input, click) ?? "";
+    report(
+      `click ${click}: deep link · workspace ${input.workspaceId} · sending …${url.slice(-24)}`,
+    );
+    await Linking.openURL(url);
+  } catch (error) {
+    console.warn("[semantic-markdown] file link failed", href, error);
+    report(`link failed: ${String(error)}`);
+  }
+}
+
 // --- component -----------------------------------------------------------------
 
-export function SemanticMarkdown({ item, theme: pluginTheme }: PluginTimelineItemProps<SpikeData>) {
+export function SemanticMarkdown({
+  item,
+  theme: pluginTheme,
+  host,
+  agentId,
+}: PluginTimelineItemProps<SpikeData>) {
   const settings = useStoredSettings();
   const theme = useMemo(() => themeFromPlugin(pluginTheme, settings), [pluginTheme, settings]);
   const dark = useMemo(() => isDarkSurface(pluginTheme.colors.surface0), [pluginTheme]);
@@ -669,7 +781,7 @@ export function SemanticMarkdown({ item, theme: pluginTheme }: PluginTimelineIte
   // unclosed emphasis) rendering gracefully during live streams, and it is a
   // no-op for complete text.
   const streamingMarkdownParser = useMemo(
-    () => applySemanticRules(createAssistantMarkdownParser({ streaming: true })),
+    () => applySemanticRules(createAssistantMarkdownParser({ streaming: true }), true),
     [],
   );
 
@@ -689,19 +801,58 @@ export function SemanticMarkdown({ item, theme: pluginTheme }: PluginTimelineIte
     ].join();
   }, [markdownParser, streamingMarkdownParser, item.data.text, prepared.cardDefinitions]);
   const rules = useMemo(() => createRendererRules(theme, dark), [theme, dark]);
+  // Debug: last path-link outcome, shown under the message until links are proven.
+  const [linkDebug, setLinkDebug] = useState<string | null>(null);
+  const paneSearchRef = useRef<PaneHandlerSearch>({ handler: null, walked: 0 });
+  const rememberPaneHandler = useCallback((search: PaneHandlerSearch) => {
+    paneSearchRef.current = search;
+  }, []);
+  const handleLinkPress = useCallback(
+    (href: string) => {
+      const path = localFilePath(href.trim());
+      if (!path) return true;
+      linkClicks += 1;
+      const click = linkClicks;
+      const pane = paneSearchRef.current.handler;
+      if (pane) {
+        try {
+          pane.openFileInWorkspace({ location: { path }, disposition: "preferred" });
+          setLinkDebug(`click ${click}: pane handler`);
+          return false;
+        } catch (error) {
+          console.warn("[semantic-markdown] pane handler failed", error);
+        }
+      }
+      setLinkDebug(
+        `click ${click}: no pane handler (walked ${paneSearchRef.current.walked}), deep link`,
+      );
+      void openWorkspaceFile(host.id, agentId, href, click, setLinkDebug);
+      return false;
+    },
+    [host.id, agentId],
+  );
 
   return (
-    <View>
-      {blocks.map((block, index) => (
-        <MarkdownRenderer
-          key={`block:${index}:${footnoteKey}`}
-          text={block}
-          theme={theme}
-          dark={dark}
-          rules={rules}
-          markdownit={index === blocks.length - 1 ? streamingMarkdownParser : markdownParser}
-        />
-      ))}
-    </View>
+    <LinkPressContext.Provider value={handleLinkPress}>
+      <View>
+        <PaneHandlerProbe onFound={rememberPaneHandler} />
+        {blocks.map((block, index) => (
+          <MarkdownRenderer
+            key={`block:${index}:${footnoteKey}`}
+            text={block}
+            theme={theme}
+            dark={dark}
+            rules={rules}
+            markdownit={index === blocks.length - 1 ? streamingMarkdownParser : markdownParser}
+            onLinkPress={handleLinkPress}
+          />
+        ))}
+        {linkDebug ? (
+          <Text selectable style={{ color: pluginTheme.colors.foregroundMuted, fontSize: 11 }}>
+            {linkDebug}
+          </Text>
+        ) : null}
+      </View>
+    </LinkPressContext.Provider>
   );
 }

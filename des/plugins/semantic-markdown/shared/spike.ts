@@ -1,6 +1,7 @@
 import MarkdownIt from "./markdown-it.js";
 import { z } from "zod";
 import { applyMarkdownExtensions } from "./extensions.ts";
+import { hasIncompleteSemanticPair } from "./source-syntax.ts";
 
 export const semanticKinds = [
   "ask",
@@ -241,6 +242,27 @@ function semanticPairRule(state: MarkdownIt.StateInline, silent: boolean) {
   return true;
 }
 
+function incompleteSemanticPairRule(state: MarkdownIt.StateInline, silent: boolean) {
+  const match = PAIR.exec(state.src.slice(state.pos));
+  if (!match) return false;
+  if (
+    state.pos >= 2 &&
+    state.src.slice(state.pos - 2, state.pos) === "==" &&
+    !isEscaped(state.src, state.pos - 2)
+  ) {
+    return false;
+  }
+
+  const contentStart = state.pos + match[0].length;
+  if (findUnescaped(state.src, `{/${match[1]}}`, contentStart) >= 0) return false;
+  const content = state.src.slice(contentStart);
+  if (content.includes("\n") || hasUnescapedSemanticTag(content)) return false;
+
+  if (!silent && state.pending) state.pushPending();
+  state.pos = state.posMax;
+  return true;
+}
+
 function semanticCardReferenceRule(state: MarkdownIt.StateInline, silent: boolean) {
   const match = CARD_REFERENCE.exec(state.src.slice(state.pos));
   if (!match) return false;
@@ -351,11 +373,18 @@ function annotateTableColumnWidths(state: MarkdownIt.StateCore): void {
 }
 
 /** Semantic grammar + markdown extensions installed onto any parser instance. */
-export function applySemanticRules(parser: MarkdownIt): MarkdownIt {
+export function applySemanticRules(parser: MarkdownIt, streaming = false): MarkdownIt {
   parser.block.ruler.before("blockquote", "semantic_callout", semanticCalloutRule);
   parser.block.ruler.before("paragraph", "semantic_text", semanticTextRule);
   parser.inline.ruler.before("emphasis", "semantic_highlight", semanticHighlightRule);
   parser.inline.ruler.before("emphasis", "semantic_pair", semanticPairRule);
+  if (streaming) {
+    parser.inline.ruler.before(
+      "semantic_pair",
+      "semantic_pair_pending",
+      incompleteSemanticPairRule,
+    );
+  }
   parser.inline.ruler.before("emphasis", "semantic_card_ref", semanticCardReferenceRule);
   parser.core.ruler.after("inline", "semantic_code_escapes", unescapeSemanticCodeRule);
   parser.core.ruler.after(
@@ -395,8 +424,11 @@ function claimsMessage(tokens: MarkdownIt.Token[]): boolean {
 
 const detector = createSemanticMarkdownParser();
 
-export function parseSpike(text: string): SpikeData | undefined {
-  return claimsMessage(parseSemanticMarkdown(detector, text)) ? { text } : undefined;
+export function parseSpike(text: string, streaming = false): SpikeData | undefined {
+  return claimsMessage(parseSemanticMarkdown(detector, text)) ||
+    (streaming && hasIncompleteSemanticPair(text))
+    ? { text }
+    : undefined;
 }
 
 /** Debug until stable: why the detector did or did not claim a message. */

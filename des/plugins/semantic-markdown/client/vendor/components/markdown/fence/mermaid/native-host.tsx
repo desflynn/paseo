@@ -1,7 +1,8 @@
 // Port of 0.9.2 packages/app/src/components/markdown/fence/mermaid/host.native.tsx.
 // Differences: the plugin mounts the app's registered native RNCWebView directly
-// (no react-native-webview import), Android replies travel through the URL hash, and
-// theme, icons and labels come from plugin props instead of unistyles/lucide/i18n.
+// (no react-native-webview import), Android has no reply channel (fixed-height box,
+// the page draws and scales itself), and theme, icons and labels come from plugin
+// props instead of unistyles/lucide/i18n.
 // Inline style arrays/objects and handlers are deliberate render-time allocations
 // (same rationale as the app's react-perf override for this viewer).
 // oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop
@@ -34,25 +35,36 @@ import { getWebViewCommands, NativeWebView } from "./native-webview.tsx";
 
 const IS_ANDROID = Platform.OS === "android";
 const MAX_PREVIEW_HEIGHT = 480;
+// Android gets no reply and cannot learn the rendered size, so the preview keeps one
+// fixed height and the page scales the SVG into it.
+const PREVIEW_HEIGHT = 240;
 const VIEWER_TOP_INSET = 48;
-// Debug flag: true shows the WebView event trail under each diagram (load, send, reply,
-// sizes). Off by default; turn on when Mermaid misbehaves on a device.
+// Debug flag: false by default; true shows the WebView event trail under each diagram.
 const MERMAID_DEBUG = false;
 
-// Android delivers WebView messages to the app's own RNCWebViewMessagingModule, which a
-// plugin cannot listen to without replacing it. Give the page a postMessage that opens a
-// window: the app's WebView turns that into a direct onOpenWindow event carrying the URL,
-// and the page does not navigate. (The earlier URL-hash channel broke: on the phone the
-// page loaded as a data: URL, where every hash change reloads the page.)
-const MESSAGE_URL = "https://paseo-plugin.invalid/msg#";
+// Android has no reply channel a plugin can hear: WebView messages go to the app's own
+// RNCWebViewMessagingModule. Every fallback failed on the phone. Hash navigation (used
+// by des/plugins/render-probe) reloads the page as data:. onShouldStartLoadWithRequest
+// also routes through the app's module. window.open blocks screenshots app-wide. So the
+// page draws in a fixed box and never reports back. This shim installs a local
+// postMessage after load, so no message reaches the native module: renderError paints a
+// short message into the diagram container, other messages are dropped. It must not
+// navigate, touch the hash, or open a window.
 const ANDROID_BRIDGE = `(function(){
   window.ReactNativeWebView = { postMessage: function (data) {
-    window.open("${MESSAGE_URL}" + encodeURIComponent(data));
+    var message;
+    try { message = JSON.parse(data); } catch (e) { return; }
+    if (!message || message.type !== "renderError") return;
+    document.body.innerHTML = '<div id="diagram"><div style="height:100%;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;color:#888;font:13px -apple-system,system-ui,sans-serif;text-align:center">Diagram could not be rendered</div></div>';
   } };
+  var style = document.createElement("style");
+  style.textContent = "html,body{margin:0;height:100%;overflow:hidden}#diagram{height:100%}#diagram svg{display:block;margin:auto;max-width:100%;max-height:100%}";
+  document.head.appendChild(style);
 })(); true;`;
 
 // Constant like the app's WEBVIEW_SOURCE: a new object per render reloads the page.
-// Nothing is fetched from the base.
+// The https base is the load path proven on the phone. The CSP blocks every fetch, so
+// nothing leaves the WebView.
 const WEBVIEW_SOURCE = IS_ANDROID
   ? { html: mermaidRuntimeHtml, baseUrl: "https://paseo-plugin.invalid/" }
   : { html: mermaidRuntimeHtml };
@@ -87,26 +99,15 @@ function MermaidWebView({
   const webViewRef = useRef<unknown>(null);
   const driverRef = useRef<MermaidRuntimeRequestDriver | null>(null);
   driverRef.current ??= new MermaidRuntimeRequestDriver();
-  const sendCountRef = useRef(0);
   const requestRef = useRef(request);
   requestRef.current = request;
+  // Android never reports a render, so a request can never settle. Skip the driver
+  // there and send each revision once; the page drops stale revisions itself.
+  const androidPageReadyRef = useRef(false);
+  const androidSentRevisionRef = useRef<number | null>(null);
 
-  const sendRequest = useCallback(
-    (current: MermaidRenderRequest | null) => {
-      // Debug: log only a real skip. "No request" fires on every render (the hook
-      // returns a fresh request object), and logging it looped the render.
-      if (!current) return;
-      if (!webViewRef.current) {
-        log?.("send skipped: no webview ref");
-        return;
-      }
-      // Debug guard: on a data: page every reply reloads the page, and each reload
-      // resends. Cap sends per view so that cannot loop.
-      sendCountRef.current += 1;
-      if (sendCountRef.current > 3) {
-        if (sendCountRef.current === 4) log?.("send cap reached, stopped");
-        return;
-      }
+  const injectRenderRequest = useCallback(
+    (current: MermaidRenderRequest) => {
       log?.(`send render r${current.revision}`);
       const message: MermaidRuntimeRenderMessage = {
         type: "render",
@@ -128,8 +129,27 @@ function MermaidWebView({
     [interactive, log],
   );
 
+  const sendRequest = useCallback(
+    (current: MermaidRenderRequest | null) => {
+      // "No request" fires on every render (the hook returns a fresh request object).
+      if (!current) return;
+      if (!webViewRef.current) {
+        log?.("send skipped: no webview ref");
+        return;
+      }
+      if (IS_ANDROID) {
+        // A send before loadingFinish lands in the page being replaced and is lost.
+        if (!androidPageReadyRef.current) return;
+        if (androidSentRevisionRef.current === current.revision) return;
+        androidSentRevisionRef.current = current.revision;
+      }
+      injectRenderRequest(current);
+    },
+    [injectRenderRequest, log],
+  );
+
   useEffect(() => {
-    sendRequest(driverRef.current?.update(request) ?? null);
+    sendRequest(IS_ANDROID ? request : (driverRef.current?.update(request) ?? null));
   }, [request, sendRequest]);
 
   const handleData = useCallback(
@@ -169,36 +189,33 @@ function MermaidWebView({
     (event: { nativeEvent: { url: string } }) => {
       const url = event.nativeEvent.url ?? "";
       log?.(`loadingStart ${url.slice(0, 30)} len=${url.length}`);
+      if (IS_ANDROID) {
+        androidPageReadyRef.current = false;
+        androidSentRevisionRef.current = null;
+        return;
+      }
       // A fresh page has nothing in flight: restart the driver with the current request,
-      // so the page's loadingFinish sends it. Otherwise a send to the page being
+      // so the page's bridgeReady sends it. Otherwise a send to the page being
       // replaced leaves the request marked in flight and the new page gets nothing.
       driverRef.current = new MermaidRuntimeRequestDriver();
       driverRef.current.update(requestRef.current);
     },
     [log],
   );
-  const onOpenWindow = useCallback(
-    (event: { nativeEvent: { targetUrl: string } }) => {
-      const url = event.nativeEvent.targetUrl ?? "";
-      if (!url.startsWith(MESSAGE_URL)) {
-        log?.(`openWindow ignored ${url.slice(0, 40)}`);
-        return;
-      }
-      handleData(decodeURIComponent(url.slice(MESSAGE_URL.length)));
-    },
-    [handleData, log],
-  );
   // The Android shim installs at page finish, after the page's own bridgeReady, so
-  // announce readiness ourselves.
+  // Android announces readiness here and gets the current request.
   const onLoadingFinish = useCallback(() => {
     log?.("loadingFinish");
-    if (IS_ANDROID) sendRequest(driverRef.current?.ready() ?? null);
+    if (!IS_ANDROID) return;
+    androidPageReadyRef.current = true;
+    androidSentRevisionRef.current = null;
+    sendRequest(requestRef.current);
   }, [sendRequest, log]);
 
   // Every prop to the memoised NativeWebView stays stable after mount (see native-webview.tsx):
   // handlers go through a ref, the style is memoised.
-  const handlersRef = useRef({ onMessage, onLoadingStart, onLoadingFinish, onOpenWindow, log });
-  handlersRef.current = { onMessage, onLoadingStart, onLoadingFinish, onOpenWindow, log };
+  const handlersRef = useRef({ onMessage, onLoadingStart, onLoadingFinish, log });
+  handlersRef.current = { onMessage, onLoadingStart, onLoadingFinish, log };
   const stableHandlers = useMemo(
     () => ({
       onMessage: (event: { nativeEvent: { data: string } }) => handlersRef.current.onMessage(event),
@@ -209,8 +226,6 @@ function MermaidWebView({
         handlersRef.current.log?.(
           `webview ${Math.round(event.nativeEvent.layout.width)}x${Math.round(event.nativeEvent.layout.height)}`,
         ),
-      onOpenWindow: (event: { nativeEvent: { targetUrl: string } }) =>
-        handlersRef.current.onOpenWindow(event),
       onLoadingError: (event: { nativeEvent: { description?: string } }) =>
         handlersRef.current.log?.(`loadingError ${event.nativeEvent.description ?? ""}`),
     }),
@@ -227,8 +242,6 @@ function MermaidWebView({
       messagingEnabled={!IS_ANDROID}
       messagingModuleName=""
       injectedJavaScript={IS_ANDROID ? ANDROID_BRIDGE : undefined}
-      hasOnOpenWindowEvent={IS_ANDROID}
-      javaScriptCanOpenWindowsAutomatically={IS_ANDROID}
       scrollEnabled={interactive}
       bounces={false}
       {...stableHandlers}
@@ -379,14 +392,16 @@ export function MermaidNativeFenceHost(props: MarkdownFenceRendererProps) {
   const openViewer = useCallback(() => setViewerOpen(true), []);
   const closeViewer = useCallback(() => setViewerOpen(false), []);
   const visible = state.visible;
-  const canShowDiagram = visible !== null && hasRuntimeContent;
-  const previewInnerStyle = useMemo(
-    () =>
-      canShowDiagram && visible
-        ? { height: Math.min(visible.height, MAX_PREVIEW_HEIGHT) }
-        : previewStyles.measuringInner,
-    [canShowDiagram, visible],
-  );
+  // Android gets no rendered reply, so show the box as soon as the source is known good
+  // and keep the fixed height. Other platforms wait for the page's rendered message.
+  const canShowDiagram = IS_ANDROID
+    ? state.status === "pending"
+    : visible !== null && hasRuntimeContent;
+  const previewInnerStyle = useMemo(() => {
+    if (!canShowDiagram) return previewStyles.measuringInner;
+    if (IS_ANDROID || !visible) return { height: PREVIEW_HEIGHT };
+    return { height: Math.min(visible.height, MAX_PREVIEW_HEIGHT) };
+  }, [canShowDiagram, visible]);
   const diagramBoxStyle = getDiagramBoxStyle(textStyle);
 
   return (
@@ -425,10 +440,10 @@ export function MermaidNativeFenceHost(props: MarkdownFenceRendererProps) {
           />
         </View>
       </Pressable>
-      {viewerOpen && canShowDiagram && visible ? (
+      {viewerOpen && canShowDiagram ? (
         <MermaidDiagramViewer
-          code={visible.source}
-          colorScheme={visible.colorScheme}
+          code={visible?.source ?? state.source}
+          colorScheme={visible?.colorScheme ?? state.colorScheme}
           onClose={closeViewer}
           inheritedStyles={inheritedStyles}
           textStyle={textStyle}
@@ -449,6 +464,6 @@ export function MermaidNativeFenceHost(props: MarkdownFenceRendererProps) {
 
 const previewStyles = StyleSheet.create({
   measuring: { position: "absolute", left: 0, right: 0, opacity: 0, pointerEvents: "none" },
-  measuringInner: { height: 240 },
+  measuringInner: { height: PREVIEW_HEIGHT },
   preview: { overflow: "hidden" },
 });
