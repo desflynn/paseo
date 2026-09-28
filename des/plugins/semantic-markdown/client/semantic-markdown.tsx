@@ -24,7 +24,13 @@ import { MarkdownTextSpan } from "./vendor/components/markdown-text.tsx";
 import { isDarkSurface, themeFromPlugin, type Theme } from "./vendor/styles/theme.ts";
 import { createAssistantMarkdownParser } from "./vendor/utils/assistant-markdown-parser.ts";
 import { splitMarkdownBlocks } from "./vendor/utils/split-markdown-blocks.ts";
-import { applySemanticRules, type SemanticKind, type SpikeData } from "../shared/spike.ts";
+import {
+  applySemanticRules,
+  prepareSemanticSource,
+  setCardDefinitions,
+  type SemanticKind,
+  type SpikeData,
+} from "../shared/spike.ts";
 
 // Style objects/arrays and the positional block key are deliberate render-time
 // allocations (same rationale as the app's react-perf override): they read the live
@@ -37,18 +43,20 @@ const palettes: Record<"light" | "dark", Record<SemanticKind, string>> = {
   light: {
     ask: "#7c3aed",
     done: "#15803d",
-    deferred: "#475569",
+    deferred: "#7c5c3b",
     warning: "#b45309",
     danger: "#b91c1c",
     info: "#1d4ed8",
+    muted: "#64748b",
   },
   dark: {
     ask: "#c4b5fd",
     done: "#86efac",
-    deferred: "#94a3b8",
+    deferred: "#d6b98c",
     warning: "#fcd34d",
     danger: "#fca5a5",
     info: "#93c5fd",
+    muted: "#94a3b8",
   },
 };
 
@@ -59,6 +67,7 @@ const icons: Record<SemanticKind, string> = {
   warning: "TriangleAlert",
   danger: "CircleX",
   info: "Info",
+  muted: "CircleMinus",
 };
 
 const kindLabels: Record<SemanticKind, string> = {
@@ -68,6 +77,7 @@ const kindLabels: Record<SemanticKind, string> = {
   warning: "Warning",
   danger: "Danger",
   info: "Info",
+  muted: "Muted",
 };
 
 // --- math -------------------------------------------------------------------
@@ -196,6 +206,11 @@ function hexTint(hex: string, alphaHex: string): string {
   return `${hex}${alphaHex}`;
 }
 
+function tableCellFlex(node: ASTNode): ViewStyle | undefined {
+  const flex = Number(node.attributes?.["data-semantic-flex"]);
+  return Number.isFinite(flex) && flex > 0 ? { flex } : undefined;
+}
+
 function createSemanticMarkdownRules(ctx: { theme: Theme; dark: boolean }): RenderRules {
   const scheme = ctx.dark ? "dark" : "light";
   const palette = palettes[scheme];
@@ -213,7 +228,10 @@ function createSemanticMarkdownRules(ctx: { theme: Theme; dark: boolean }): Rend
       inheritedStyles: TextStyle = {},
     ) => {
       const owner = parent.find(
-        (p) => p.type === "semantic_text" || p.type === "semantic_highlight",
+        (p) =>
+          p.type === "semantic_text" ||
+          p.type === "semantic_highlight" ||
+          p.type === "semantic_inline",
       );
       const kind = owner?.sourceMeta?.kind as SemanticKind | undefined;
       return (
@@ -255,6 +273,26 @@ function createSemanticMarkdownRules(ctx: { theme: Theme; dark: boolean }): Rend
         </MarkdownInheritedText>
       );
     },
+    // Paired `{kind}content{/kind}`: colour only. No background, no box metrics,
+    // so the span never changes line layout.
+    semantic_inline: (
+      node: ASTNode,
+      children: ReactNode[],
+      _p: ASTNode[],
+      _s: MarkdownStyles,
+      inheritedStyles: TextStyle = {},
+    ) => {
+      const kind = (node.sourceMeta?.kind as SemanticKind) ?? "info";
+      return (
+        <MarkdownInheritedText
+          key={node.key}
+          inheritedStyles={inheritedStyles}
+          textStyle={{ color: palette[kind] }}
+        >
+          {children}
+        </MarkdownInheritedText>
+      );
+    },
     semantic_callout: (node: ASTNode, children: ReactNode[], _p: ASTNode[], _s: MarkdownStyles) => {
       const kind = (node.sourceMeta?.kind as SemanticKind) ?? "info";
       return (
@@ -271,6 +309,14 @@ function createSemanticMarkdownRules(ctx: { theme: Theme; dark: boolean }): Rend
         </SemanticCallout>
       );
     },
+    semantic_card_ref: (node: ASTNode) => (
+      <SemanticCardReference
+        key={node.key}
+        source={String(node.sourceMeta?.source ?? "")}
+        theme={ctx.theme}
+        dark={ctx.dark}
+      />
+    ),
     // Leaf rules must merge inheritedStyles; styles.text alone has no colour (drew black).
     math_inline: (
       node: ASTNode,
@@ -543,7 +589,7 @@ function createAssistantCopyRules(): RenderRules {
     th: (node: ASTNode, children: ReactNode[], _p: ASTNode[], styles: MarkdownStyles) => (
       <MarkdownTableCellText key={node.key}>
         <View
-          style={styles._VIEW_SAFE_th}
+          style={[styles._VIEW_SAFE_th, tableCellFlex(node)]}
           dataSet={markdownCopyTableCellDataSet("th", node.attributes?.style)}
         >
           {children}
@@ -553,7 +599,7 @@ function createAssistantCopyRules(): RenderRules {
     td: (node: ASTNode, children: ReactNode[], _p: ASTNode[], styles: MarkdownStyles) => (
       <MarkdownTableCellText key={node.key}>
         <View
-          style={styles._VIEW_SAFE_td}
+          style={[styles._VIEW_SAFE_td, tableCellFlex(node)]}
           dataSet={markdownCopyTableCellDataSet("td", node.attributes?.style)}
         >
           {children}
@@ -572,11 +618,49 @@ function createAssistantCopyRules(): RenderRules {
   };
 }
 
+function createRendererRules(theme: Theme, dark: boolean): RenderRules {
+  return {
+    ...createSharedMarkdownRules({ theme, dark }),
+    ...createAssistantCopyRules(),
+    ...createSemanticMarkdownRules({ theme, dark }),
+  };
+}
+
+function SemanticCardReference({
+  source,
+  theme,
+  dark,
+}: {
+  source: string;
+  theme: Theme;
+  dark: boolean;
+}) {
+  const parser = useMemo(() => applySemanticRules(createAssistantMarkdownParser()), []);
+  const prepared = useMemo(() => prepareSemanticSource(source), [source]);
+  const rules = useMemo(() => createRendererRules(theme, dark), [theme, dark]);
+  const definitionKey = useMemo(() => {
+    setMessageFootnotes(parser, source);
+    setCardDefinitions(parser, prepared.cardDefinitions);
+    return JSON.stringify([...prepared.cardDefinitions]);
+  }, [parser, prepared.cardDefinitions, source]);
+
+  return (
+    <MarkdownRenderer
+      key={definitionKey}
+      text={prepared.text}
+      theme={theme}
+      dark={dark}
+      rules={rules}
+      markdownit={parser}
+    />
+  );
+}
+
 // --- component -----------------------------------------------------------------
 
 export function SemanticMarkdown({ item, theme: pluginTheme }: PluginTimelineItemProps<SpikeData>) {
-  const { theme: appTheme } = useStoredSettings();
-  const theme = useMemo(() => themeFromPlugin(pluginTheme, appTheme), [pluginTheme, appTheme]);
+  const settings = useStoredSettings();
+  const theme = useMemo(() => themeFromPlugin(pluginTheme, settings), [pluginTheme, settings]);
   const dark = useMemo(() => isDarkSurface(pluginTheme.colors.surface0), [pluginTheme]);
 
   const markdownParser = useMemo(() => applySemanticRules(createAssistantMarkdownParser()), []);
@@ -589,25 +673,22 @@ export function SemanticMarkdown({ item, theme: pluginTheme }: PluginTimelineIte
     [],
   );
 
-  const blocks = useMemo(() => splitMarkdownBlocks(item.data.text), [item.data.text]);
+  const prepared = useMemo(() => prepareSemanticSource(item.data.text), [item.data.text]);
+  const blocks = useMemo(() => splitMarkdownBlocks(prepared.text), [prepared.text]);
   // Each block parses on its own, so footnote numbers come from the whole message.
   // The numbering goes in the block keys: a block whose text did not change must
   // still re-parse when a definition streams in later.
   const footnoteKey = useMemo(() => {
     setMessageFootnotes(markdownParser, item.data.text);
     setMessageFootnotes(streamingMarkdownParser, item.data.text);
+    setCardDefinitions(markdownParser, prepared.cardDefinitions);
+    setCardDefinitions(streamingMarkdownParser, prepared.cardDefinitions);
     return [
       ...((markdownParser as { footnoteIndices?: Map<string, number> }).footnoteIndices ?? []),
+      ...prepared.cardDefinitions,
     ].join();
-  }, [markdownParser, streamingMarkdownParser, item.data.text]);
-  const rules = useMemo(
-    () => ({
-      ...createSharedMarkdownRules({ theme, dark }),
-      ...createAssistantCopyRules(),
-      ...createSemanticMarkdownRules({ theme, dark }),
-    }),
-    [theme, dark],
-  );
+  }, [markdownParser, streamingMarkdownParser, item.data.text, prepared.cardDefinitions]);
+  const rules = useMemo(() => createRendererRules(theme, dark), [theme, dark]);
 
   return (
     <View>
