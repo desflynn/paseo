@@ -14,11 +14,12 @@ import {
   Pressable,
   Text,
   View,
+  type ImageStyle,
   type TextProps,
   type TextStyle,
   type ViewStyle,
 } from "react-native";
-import { openExternalUrl } from "@getpaseo/plugin/client";
+import { openExternalUrl, useRpc } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import Markdown, {
   MarkdownIt,
@@ -44,7 +45,10 @@ import { resolveInlineImageSize, type InlineImageDimensions } from "./inline-ima
 import { groupMarkdownParts, type MarkdownPartGroup } from "./part-groups.ts";
 import { colorMarkdownLinkChildren } from "./link-children.ts";
 import { MarkdownLinkText } from "./link-text.tsx";
+import { ImageLightbox, type ImageLightboxSource } from "../image-lightbox.tsx";
 import type { MarkdownCopyInlineTag } from "../../assistant-selection-copy/markup.ts";
+import { localFilePath } from "../../../../shared/file-link.ts";
+import { readImageRpc, type ReadImageResult } from "../../../../shared/read-image.ts";
 
 export type MarkdownStyles = Record<string, TextStyle & ViewStyle & { [key: string]: unknown }>;
 
@@ -212,7 +216,7 @@ function MarkdownFragment({
   );
 }
 
-function useNaturalImageDimensions(part: MarkdownInlineImagePart): {
+function useNaturalImageDimensions(part: { src: string; width?: number; height?: number }): {
   natural: InlineImageDimensions | null;
   failed: boolean;
   setFailed: (failed: boolean) => void;
@@ -352,6 +356,122 @@ function MarkdownFlowImage({
     <Pressable onPress={handlePress} accessibilityRole="link">
       {image}
     </Pressable>
+  );
+}
+
+const MARKDOWN_IMAGE_LOADING_HEIGHT = 160;
+
+// One daemon read per path. Streaming re-renders remount this component, so cache the
+// promise rather than the result: a second read of the same screenshot is never needed.
+const localImageCache = new Map<string, Promise<string | null>>();
+
+function cachedLocalImage(
+  path: string,
+  readImage: (input: { path: string }) => Promise<ReadImageResult>,
+): Promise<string | null> {
+  const cached = localImageCache.get(path);
+  if (cached) {
+    return cached;
+  }
+  const pending = readImage({ path }).then(
+    (result) => (result.ok ? `data:${result.mime};base64,${result.base64}` : null),
+    () => null,
+  );
+  localImageCache.set(path, pending);
+  return pending;
+}
+
+// Markdown images: http(s) and data: load directly as before. Absolute paths and
+// file:// URLs go through the plugin's daemon process (client/vendor cannot read the
+// filesystem) and come back as a data: URI. A failed read shows the alt text muted.
+function MarkdownImage({
+  src,
+  alt,
+  imageStyle,
+  theme,
+}: {
+  src: string;
+  alt: string;
+  imageStyle: ImageStyle;
+  theme: Theme;
+}) {
+  const readImage = useRpc(readImageRpc);
+  const localPath = useMemo(() => localFilePath(src.trim()), [src]);
+  const [localUri, setLocalUri] = useState<string | null>(null);
+  const [localFailed, setLocalFailed] = useState(false);
+
+  useEffect(() => {
+    if (!localPath) {
+      return;
+    }
+    let cancelled = false;
+    setLocalUri(null);
+    setLocalFailed(false);
+    const load = async () => {
+      const uri = await cachedLocalImage(localPath, readImage);
+      if (cancelled) {
+        return;
+      }
+      if (uri) {
+        setLocalUri(uri);
+        return;
+      }
+      setLocalFailed(true);
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [localPath, readImage]);
+
+  const uri = localPath ? localUri : src;
+  const { natural } = useNaturalImageDimensions({ src: uri ?? "" });
+  const source = useMemo(() => ({ uri: uri ?? "" }), [uri]);
+  const imageSizeStyle = useMemo(
+    () =>
+      natural
+        ? { aspectRatio: natural.width / natural.height }
+        : { height: MARKDOWN_IMAGE_LOADING_HEIGHT },
+    [natural],
+  );
+  const resolvedStyle = useMemo(
+    () => [imageStyle, styles.markdownImage, imageSizeStyle],
+    [imageStyle, imageSizeStyle],
+  );
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const openViewer = useCallback(() => setViewerOpen(true), []);
+  const closeViewer = useCallback(() => setViewerOpen(false), []);
+  const lightboxSource = useMemo<ImageLightboxSource | null>(
+    () => (viewerOpen && uri ? { uri, contentSize: natural ?? undefined } : null),
+    [natural, uri, viewerOpen],
+  );
+
+  if (!uri) {
+    if (!localFailed || !alt) {
+      return null;
+    }
+    return (
+      <Text style={[styles.markdownImageAlt, { color: theme.colors.foregroundMuted }]}>{alt}</Text>
+    );
+  }
+
+  return (
+    <>
+      <Pressable
+        accessibilityLabel={alt || "Open image"}
+        accessibilityRole="button"
+        onPress={openViewer}
+        style={styles.markdownImage}
+      >
+        <Image
+          source={source}
+          style={resolvedStyle}
+          resizeMode="contain"
+          accessibilityLabel={alt || undefined}
+        />
+      </Pressable>
+      <ImageLightbox source={lightboxSource} onClose={closeViewer} theme={theme} />
+    </>
   );
 }
 
@@ -747,6 +867,15 @@ export function createSharedMarkdownRules(ctx: MarkdownThemeContext): RenderRule
         {colorMarkdownLinkChildren(children, styles.link.color)}
       </SharedMarkdownLink>
     ),
+    image: (node: ASTNode, _children: ReactNode[], _parent: ASTNode[], styles: MarkdownStyles) => (
+      <MarkdownImage
+        key={node.key}
+        src={typeof node.attributes?.src === "string" ? node.attributes.src : ""}
+        alt={typeof node.attributes?.alt === "string" ? node.attributes.alt : ""}
+        imageStyle={(styles._VIEW_SAFE_image ?? styles.image) as ImageStyle}
+        theme={ctx.theme}
+      />
+    ),
   };
 }
 
@@ -762,6 +891,8 @@ const styles = {
   },
   imageTextRowContent: { flex: 1, minWidth: 0 },
   flowImage: { marginTop: 2 },
+  markdownImage: { width: "100%" as const },
+  markdownImageAlt: { fontSize: 12, lineHeight: 16 },
   flowImageFallback: {
     marginTop: 2,
     paddingHorizontal: 4,
