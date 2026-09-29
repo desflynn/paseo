@@ -7,6 +7,7 @@ import {
   workspaceFileRoute,
   workspaceFileRouteFromPath,
 } from "./file-link.ts";
+import { imageMimeFromPath } from "./read-image.ts";
 
 // Paseo's own encoders (packages/app/src/utils/host-routes.ts) use Node Buffer.
 const b64url = (value: string) =>
@@ -117,6 +118,18 @@ test("local file links are absolute paths and file:// URLs only", () => {
 
 test("no workspace means no file link", () => {
   assert.equal(workspaceFileLinkUrl({ serverId: "srv", workspaceId: undefined, href: PLAN }), null);
+});
+
+test("image mime comes from the extension, only for formats RN Image draws", () => {
+  assert.equal(imageMimeFromPath("/Users/des/a.png"), "image/png");
+  assert.equal(imageMimeFromPath("/Users/des/a.JPG"), "image/jpeg");
+  assert.equal(imageMimeFromPath("/Users/des/a.jpeg"), "image/jpeg");
+  assert.equal(imageMimeFromPath("/Users/des/a.gif"), "image/gif");
+  assert.equal(imageMimeFromPath("/Users/des/a.webp"), "image/webp");
+  // SVG stays out: RN Image cannot draw it on the phone.
+  assert.equal(imageMimeFromPath("/Users/des/a.svg"), null);
+  assert.equal(imageMimeFromPath("/Users/des/a.md"), null);
+  assert.equal(imageMimeFromPath("/Users/des/no-extension"), null);
 });
 
 // values[0] is the start fiber, each next value is its parent. Real fibers carry
