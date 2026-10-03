@@ -2339,6 +2339,7 @@ export class PiRpcAgentSession implements AgentSession {
       type: "tool_call" as const,
       callId: toolCallId,
       name: mapping?.name ?? toolCall.toolName,
+      ...(mapping?.displayName ? { metadata: { toolDisplayName: mapping.displayName } } : {}),
       detail,
     };
     const item =

@@ -419,6 +419,35 @@ class SessionEvents {
 }
 
 describe("PiRpcAgentSession", () => {
+  test("emits MCP labels without changing tool identity", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    await session.startTurn("run");
+    fakeSession.emit({
+      type: "tool_execution_start",
+      toolCallId: "mcp-1",
+      toolName: "mcp",
+      args: { tool: "paseo_list_agents" },
+    });
+    fakeSession.emit({
+      type: "tool_execution_end",
+      toolCallId: "mcp-1",
+      toolName: "mcp",
+      result: { content: [], details: { mode: "call", server: "paseo", tool: "list_agents" } },
+      isError: false,
+    });
+    fakeSession.finishTurn();
+    await events.nextTurnCompletion();
+    const calls = events.timelineItems().filter((item) => item.type === "tool_call");
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call).toMatchObject({
+        name: "paseo.list_agents",
+        metadata: { toolDisplayName: "Paseo > Get Agents" },
+      });
+    }
+  });
+
   test("completes a turn and answers a dialog when an adapter throws", async () => {
     const { pi, session, events } = await createSession();
     Object.assign(session, {

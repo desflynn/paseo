@@ -154,6 +154,7 @@ export function buildToolCallDisplayModel(input: ToolCallDisplayInput): ToolCall
   const canonicalDisplay = buildCanonicalDetailDisplay(input);
   const unknownDetailOverride = buildUnknownDetailOverride(input);
   const displayName =
+    (isRecord(input.metadata) ? readString(input.metadata.toolDisplayName) : undefined) ??
     unknownDetailOverride.displayName ??
     canonicalDisplay.displayName ??
     humanizeToolName(input.name);

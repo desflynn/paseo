@@ -16,6 +16,35 @@ async function collectHistory(
 }
 
 describe("Pi history mapper", () => {
+  test("replays MCP labels without changing tool identity", async () => {
+    const events = await collectHistory([
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "mcp-1", name: "mcp", arguments: { tool: "paseo_list_agents" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "mcp-1",
+        toolName: "mcp",
+        content: [],
+        details: { mode: "call", server: "paseo", tool: "list_agents" },
+      },
+    ]);
+    expect(events).toHaveLength(2);
+    for (const event of events) {
+      expect(event).toMatchObject({
+        type: "timeline",
+        item: {
+          type: "tool_call",
+          name: "paseo.list_agents",
+          metadata: { toolDisplayName: "Paseo > Get Agents" },
+        },
+      });
+    }
+  });
+
   test("replays user, assistant, reasoning, and completed tool calls", async () => {
     await expect(
       collectHistory([
