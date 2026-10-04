@@ -436,6 +436,7 @@ type AgentMcpTransportFactory = () => Promise<unknown>;
 export interface SessionOptions {
   browserToolsBroker?: BrowserToolsBroker | null;
   clientId: string;
+  clientType?: "mobile" | "browser" | "cli" | "mcp" | "hub" | null;
   permissions: readonly DaemonPermission[];
   appVersion?: string | null;
   clientCapabilities?: Record<string, unknown> | null;
@@ -687,6 +688,7 @@ export class Session {
   );
   private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
   private readonly clientId: string;
+  private readonly clientType: SessionOptions["clientType"];
   private readonly authorization: SessionAuthorization;
   private appVersion: string | null;
   private clientCapabilities: ReadonlySet<ClientCapability>;
@@ -847,6 +849,7 @@ export class Session {
     } = options;
     this.browserToolsBroker = options.browserToolsBroker;
     this.clientId = clientId;
+    this.clientType = options.clientType;
     this.authorization = new SessionAuthorization(permissions);
     this.appVersion = appVersion ?? null;
     this.clientCapabilities = parseClientCapabilities(clientCapabilities);
@@ -3991,6 +3994,7 @@ export class Session {
         request,
         progress ? (snapshot) => progress.emit(this.creationUpdate(snapshot)) : undefined,
       );
+      this.applyOwnerMineLabel(creation.agent?.workspaceId ?? creation.workspaceId);
       this.emitForSource(
         {
           type: "agent.create.response",
@@ -4155,6 +4159,7 @@ export class Session {
       } else {
         agent = await this.createSessionAgent(msg);
       }
+      this.applyOwnerMineLabel(agent.workspaceId);
       this.emit({
         type: "status",
         payload: {
@@ -6351,6 +6356,20 @@ export class Session {
     }
   }
 
+  // MINE overlay (des/overlays): owner-origin activations get the MINE workspace label.
+  private applyOwnerMineLabel(workspaceId: string | null | undefined): void {
+    if (!workspaceId) return;
+    if (this.clientType !== "mobile" && this.clientType !== "browser") return;
+    this.workspaceLabelService
+      ?.setAssignment({ workspaceId, label: { name: "MINE", color: "indigo" }, assigned: true })
+      .catch((error) => {
+        this.sessionLogger.warn(
+          { err: error, workspaceId },
+          "Failed to assign MINE workspace label",
+        );
+      });
+  }
+
   private requireWorkspaceLabels(): WorkspaceLabelService {
     if (!this.workspaceLabelService) {
       throw new SessionRequestError("workspace_labels_unavailable", "Workspace labels unavailable");
@@ -8093,6 +8112,11 @@ export class Session {
       } else {
         await send();
       }
+
+      const agentRecord = await this.agentStorage.get(agentId);
+      this.applyOwnerMineLabel(
+        agentRecord?.workspaceId ?? this.agentManager.getAgent(agentId)?.workspaceId,
+      );
 
       this.emit({
         type: "send_agent_message_response",
