@@ -1,0 +1,65 @@
+{
+  "request": "Reload and continue all Pi supers, mechanics, and non-idle Pi agents",
+  "globalReserveTokens": 30000,
+  "settingsBackup": "/Users/des/.pi/agent/settings.json.bak-20261004",
+  "selectionVerified": "All 25 non-archived Pi registry agents were present in the global CLI listing. Selected FP-SUPER and FP-MECHANIC titles regardless of idle state, plus running/initializing/error Pi agents. Excluded unrelated idle agents and closed agents.",
+  "selfAgentId": "03f2179c-021f-426c-88bc-a98d9dad37c4",
+  "targets": [
+    {
+      "agentId": "e849b6c4-475f-45ff-a7d3-82ad27ef672a",
+      "name": "FP-SUPER-18 korolev-v2",
+      "initialStatus": "running",
+      "reload": "reloaded",
+      "continue": "delivered",
+      "pickup": "verified-active-after-30s-wait"
+    },
+    {
+      "agentId": "3ce927fe-cf5a-484b-8859-19130583c22c",
+      "name": "FP-SUPER-6 dynamic-agentsmd",
+      "initialStatus": "idle",
+      "reload": "reloaded",
+      "continue": "delivered",
+      "pickup": "verified-active-after-30s-wait"
+    },
+    {
+      "agentId": "b64657fd-41f2-44fc-b69c-3bc5fa1d9d34",
+      "name": "FP-MECHANIC-8 T46-T47-matcher-fix",
+      "initialStatus": "idle",
+      "reload": "reloaded",
+      "continue": "delivered",
+      "pickup": "verified-active-after-30s-wait"
+    },
+    {
+      "agentId": "aacf0224-30b6-486f-87f0-470bb19a7b33",
+      "name": "FP-ORCHES-2 SP0",
+      "initialStatus": "running",
+      "reload": "reloaded",
+      "continue": "delivered",
+      "pickup": "verified-continue-received-and-compaction-activity"
+    },
+    {
+      "agentId": "3d68a2d0-396a-4dec-b3df-0281bf8a4e8e",
+      "name": "FP-EXAMINER-4 S4",
+      "initialStatus": "error",
+      "reload": "reloaded",
+      "continue": "delivered",
+      "pickup": "verified-received-and-running; prior-native-history-only-BRIDGE_DOWN; task-recovery-not-verified"
+    },
+    {
+      "agentId": "a9e6de95-7d33-430b-96c0-f4cf5077f69a",
+      "name": "DGX replacement",
+      "initialStatus": "running",
+      "reload": "reloaded",
+      "continue": "delivered",
+      "pickup": "verified-active-after-30s-wait"
+    },
+    {
+      "agentId": "03f2179c-021f-426c-88bc-a98d9dad37c4",
+      "name": "Paseo Pi guy",
+      "initialStatus": "running",
+      "reload": "reloaded-confirmed-in-CLI-result",
+      "continue": "delivered-via-scheduled-continuation",
+      "pickup": "verified-resumed-after-reload; global-reserve-remains-30000; wake-chip-cleared"
+    }
+  ]
+}
