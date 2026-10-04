@@ -1,0 +1,65 @@
+# Overlays
+
+Local changes we carry on top of an upstream Paseo release to build our `X.Y.Z-df` desktop app.
+Each overlay has a patch and a plain description of what it must achieve. If upstream moves the
+code and the patch stops applying, redo the change by hand from the description.
+
+Plugins (`des/plugins/`) and upgrade notes (`des/upgrade-*`) are not overlays. They are not patches to Paseo code.
+
+## Reapply on a new base
+
+```bash
+git checkout -b X.Y.Z-df vX.Y.Z
+git apply --3way des/overlays/unsigned-macos-build.patch   # always
+git apply --3way des/overlays/acp-context-meter.patch      # only while the base lacks upstream 48329facc
+npm install                                                # then fix allowScripts, see overlay 1
+npm run build:desktop                                      # from the repo root
+```
+
+Check a patch without touching the working tree:
+
+```bash
+GIT_INDEX_FILE=/tmp/overlay-check.idx git read-tree vX.Y.Z
+GIT_INDEX_FILE=/tmp/overlay-check.idx git apply --cached --check des/overlays/<name>.patch
+```
+
+## 1. Unsigned macOS build (the big one)
+
+**Without this we cannot build or install our own desktop app.** We have no Apple signing or notarization credentials.
+
+- Patch: `unsigned-macos-build.patch`
+- Source commits: `aa614fd8d`, `4389f35ad`, `e7de061dd`
+- Upstream: never. This change is local only.
+
+What it must achieve:
+
+1. `packages/desktop/electron-builder.yml`, `mac:` block: build without signing or notarization.
+   Set `hardenedRuntime: false`, `notarize: false`, `identity: null`, and remove the
+   `entitlements` and `entitlementsInherit` lines.
+2. `package.json`, root: an `allowScripts` map that approves the install scripts the build needs
+   (native modules such as esbuild, fsevents, sharp, node-pty, workerd, msgpackr-extract).
+   The package versions in the patch belong to the 0.9.1 to 0.10.3 dependency tree. **Treat them
+   as reference only.** On a new base, run `npm install`, read which install scripts npm blocks,
+   and approve those exact versions.
+
+Last verified: applies cleanly to `v0.10.3` and to upstream `main` at `642d69b14` (2026-10-04).
+
+## 2. ACP context meter
+
+ACP agents report the context-window size and the tokens used in `usage_update`. Upstream
+0.10.3 drops these values (`handleUsageUpdate` is `void update;`), so ACP agents show no context meter.
+
+- Patch: `acp-context-meter.patch`
+- Source commit: `852173171`
+- Issue: getpaseo/paseo#1390
+
+What it must achieve: in `packages/server/src/server/agent/providers/acp-agent.ts`,
+`handleUsageUpdate` pushes a `usage_updated` event with `contextWindowUsedTokens: update.used`
+and `contextWindowMaxTokens: update.size`.
+
+**Retire this overlay when the base includes upstream `48329facc`** (#4848, "surface
+context-window usage from the ACP usage_update notification"). That fix is on upstream `main`
+but in no release tag as of 2026-10-04. It does the same job with input validation, so our patch no longer applies on top of it.
+Check: `git tag --contains 48329facc`.
+
+Last verified: applies cleanly to `v0.10.3`; does not apply to upstream `main` (superseded).
