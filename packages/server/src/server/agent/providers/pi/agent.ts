@@ -1144,6 +1144,9 @@ export class PiRpcAgentSession implements AgentSession {
   private outOfBandCompactionEmit: ((event: AgentStreamEvent) => void) | null = null;
   private outOfBandCompactionStarted = false;
   private outOfBandCompactionCompleted = false;
+  // Set while a manual /compact RPC is in flight; startTurn waits on it so Pi is
+  // never handed a prompt mid-compaction (Pi rejects those until it settles).
+  private manualCompactionSettled: Promise<void> | null = null;
   private commandCache: AgentSlashCommand[] | null = null;
   private state: PiSessionState;
   private readonly currentModeId: string | null;
@@ -1232,6 +1235,15 @@ export class PiRpcAgentSession implements AgentSession {
 
     void (async () => {
       try {
+        const heldByCompaction = this.manualCompactionSettled;
+        if (heldByCompaction) {
+          await heldByCompaction;
+          // The turn was interrupted while held; interrupt already reset the turn
+          // state and emitted turn_canceled, so the prompt must never be delivered.
+          if (this.activeTurnId !== turnId) {
+            return;
+          }
+        }
         const ack = await this.runtimeSession.prompt(payload.text, payload.images);
         this.activePromptRequestId = ack.requestId ?? null;
         const correlatedResult = ack.requestId
@@ -1722,6 +1734,11 @@ export class PiRpcAgentSession implements AgentSession {
     this.outOfBandCompactionEmit = emit;
     this.outOfBandCompactionStarted = false;
     this.outOfBandCompactionCompleted = false;
+    let settleCompaction!: () => void;
+    const compactionSettled = new Promise<void>((resolve) => {
+      settleCompaction = resolve;
+    });
+    this.manualCompactionSettled = compactionSettled;
     try {
       await this.runtimeSession.compact(customInstructions);
     } catch (error) {
@@ -1749,6 +1766,8 @@ export class PiRpcAgentSession implements AgentSession {
         },
       });
     } finally {
+      settleCompaction();
+      this.manualCompactionSettled = null;
       if (this.outOfBandCompactionEmit === emit && !this.outOfBandCompactionStarted) {
         this.outOfBandCompactionEmit = null;
         this.outOfBandCompactionStarted = false;

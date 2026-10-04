@@ -23,7 +23,7 @@ import {
   PiRpcAgentSession,
   transformPiModels,
 } from "./agent.js";
-import { FakePi } from "./test-utils/fake-pi.js";
+import { FakePi, FakePiSession } from "./test-utils/fake-pi.js";
 import { createPiExtensionHost } from "./extensions/index.js";
 import { PiExtensionHost } from "./extensions/host.js";
 import type { PiModel, PiThinkingLevel } from "./rpc-types.js";
@@ -2920,6 +2920,112 @@ describe("PiRpcAgentClient", () => {
         },
       },
     ]);
+  });
+
+  // fake-pi.ts is shared; compaction-gate tests patch the instance's compact with a
+  // controllable gate so a prompt can be submitted while the compaction is in flight.
+  interface HeldCompaction {
+    release: () => void;
+    fail: (error: Error) => void;
+  }
+
+  function holdPiCompaction(session: FakePiSession): HeldCompaction {
+    let releaseCompaction!: () => void;
+    let failCompaction!: (error: Error) => void;
+    const gate = new Promise<void>((resolve, reject) => {
+      releaseCompaction = resolve;
+      failCompaction = reject;
+    });
+    session.compact = (customInstructions?: string): Promise<void> => {
+      session.compactRequests.push(customInstructions === undefined ? {} : { customInstructions });
+      session.emit({ type: "compaction_start", reason: "manual" });
+      return gate.then(() => {
+        session.emit({ type: "compaction_end", reason: "manual" });
+        return undefined;
+      });
+    };
+    return {
+      release: () => releaseCompaction(),
+      fail: (error: Error) => failCompaction(error),
+    };
+  }
+
+  test("holds a prompt submitted during manual compaction until the compaction settles", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const compaction = holdPiCompaction(fakeSession);
+    const handler = (session as AgentSession).tryHandleOutOfBand?.("/compact");
+    expect(handler).not.toBeNull();
+    const compactionRun = handler?.run({ emit: () => undefined });
+    await flushTurnScheduling();
+    expect(fakeSession.compactRequests).toEqual([{}]);
+
+    await session.startTurn("hello during compaction");
+    await flushTurnScheduling();
+    expect(fakeSession.prompts).toEqual([]);
+
+    compaction.release();
+    await compactionRun;
+    await flushTurnScheduling();
+    expect(fakeSession.prompts).toEqual([{ message: "hello during compaction", imageCount: 0 }]);
+
+    fakeSession.finishTurn();
+    await events.nextTurnCompletion();
+  });
+
+  test("never delivers a prompt canceled while held by manual compaction", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const compaction = holdPiCompaction(fakeSession);
+    const handler = (session as AgentSession).tryHandleOutOfBand?.("/compact");
+    const compactionRun = handler?.run({ emit: () => undefined });
+    await flushTurnScheduling();
+
+    await session.startTurn("held message");
+    await flushTurnScheduling();
+    expect(fakeSession.prompts).toEqual([]);
+
+    await session.interrupt();
+    await events.nextTurnCancellation();
+
+    compaction.release();
+    await compactionRun;
+    await flushTurnScheduling();
+    expect(fakeSession.prompts).toEqual([]);
+  });
+
+  test("delivers the held prompt after manual compaction fails", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const compaction = holdPiCompaction(fakeSession);
+    const outOfBandEvents: AgentStreamEvent[] = [];
+    const handler = (session as AgentSession).tryHandleOutOfBand?.("/compact");
+    const compactionRun = handler?.run({
+      emit: (event) => outOfBandEvents.push(event),
+    });
+    await flushTurnScheduling();
+
+    await session.startTurn("hello after failed compaction");
+    await flushTurnScheduling();
+    expect(fakeSession.prompts).toEqual([]);
+
+    compaction.fail(new Error("summarizer failed"));
+    await expect(compactionRun).resolves.toBeUndefined();
+    await flushTurnScheduling();
+    expect(fakeSession.prompts).toEqual([
+      { message: "hello after failed compaction", imageCount: 0 },
+    ]);
+    expect(outOfBandEvents).toContainEqual({
+      type: "timeline",
+      provider: "pi",
+      item: {
+        type: "assistant_message",
+        text: "[Error] Failed to compact context: summarizer failed",
+      },
+    });
+
+    fakeSession.finishTurn();
+    await events.nextTurnCompletion();
   });
 
   test("executes Pi autocompact through RPC instead of prompt text", async () => {

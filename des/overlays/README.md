@@ -12,6 +12,8 @@ Plugins (`des/plugins/`) and upgrade notes (`des/upgrade-*`) are not overlays. T
 git checkout -b X.Y.Z-df vX.Y.Z
 git apply --3way des/overlays/unsigned-macos-build.patch   # always
 git apply --3way des/overlays/acp-context-meter.patch      # only while the base lacks upstream 48329facc
+git apply --3way des/overlays/mine-label.patch
+git apply --3way des/overlays/pi-compaction-hold.patch
 npm install                                                # then fix allowScripts, see overlay 1
 npm run build:desktop                                      # from the repo root
 ```
@@ -63,3 +65,42 @@ but in no release tag as of 2026-10-04. It does the same job with input validati
 Check: `git tag --contains 48329facc`.
 
 Last verified: applies cleanly to `v0.10.3`; does not apply to upstream `main` (superseded).
+
+## 3. MINE label for work the owner started
+
+The sidebar shows the work Des handed out. When the Paseo app creates an agent or sends one a
+prompt, the daemon puts the workspace label `MINE` on that agent's workspace. Agents, the CLI,
+DCI, plugins and schedules never add it. The daemon never removes it. Guys ask Des whether to keep
+or clear it when they deliver (dci-harness doctrine, `paseo-messaging.md`, WHEN YOU ARE THE GUY).
+
+- Patch: `mine-label.patch` (server only; the phone app needs no change)
+- Worklog: `MINE-WORKLOG.md`
+- Upstream: not filed.
+
+What it must achieve:
+
+1. `websocket-server.ts`: pass the hello's `clientType` into the `Session`.
+2. `session.ts`: store it. After an accepted `agent.create.request`, `create_agent_request` or
+   `send_agent_message_request` from a `mobile` or `browser` session, call the workspace label
+   service `setAssignment` with `MINE`, `assigned: true`. Do not await it. Log a warning on failure.
+   The app sends `clientType: "mobile"` on phone, desktop and web
+   (`packages/app/src/runtime/host-runtime.ts`); CLI, DCI and plugins send `cli`.
+3. The `MINE` catalog entry is created in the app. If it already exists, the label service keeps its colour.
+
+Last verified: applies cleanly to `v0.10.3` (2026-10-04).
+
+## 4. Pi: hold prompts during manual compaction
+
+After a manual `/compact`, Paseo sent the next prompt straight to Pi, and Pi's RPC `prompt()`
+rejects prompts until compaction finishes. Pi's own terminal queues them; RPC callers must wait.
+
+- Patch: `pi-compaction-hold.patch`
+- Worklog: `PI-COMPACTION-WORKLOG.md`
+- Upstream: not fixed on `main` as of 2026-10-04.
+
+What it must achieve: in `packages/server/src/server/agent/providers/pi/agent.ts`,
+`executeCompactCommand` holds a promise that settles in `finally`. `startTurn` waits on it before
+`runtimeSession.prompt`, then delivers once. If the turn was interrupted while it waited, it
+delivers nothing. A failed compaction still releases the prompt.
+
+Last verified: applies cleanly to `v0.10.3` (2026-10-04).
