@@ -143,5 +143,7 @@ Last verified: written against `0.10.3-df` at 2419f0e5b (2026-10-05).
 
 - Patch: `pi-compaction-status.patch`. Worklog: `PI-COMPACTION-STATUS-WORKLOG.md`.
 - `compaction_end` with `errorMessage` or `aborted: true` still closes the loading item, and a
-  failed auto compaction also adds `[Error] Auto compaction failed: <msg>` or `... aborted`. The
-  protocol status stays `loading | completed`, so old apps keep working.
+  failed auto compaction also adds `[Error] Auto compaction failed at X / Y tokens: <msg>` or
+  `... aborted at X / Y tokens`. The figures are the latest usage the poller published; without
+  usage the line has no "at ..." part. The protocol status stays `loading | completed`, so old
+  apps keep working.

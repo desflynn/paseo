@@ -1,8 +1,8 @@
 diff --git a/packages/server/src/server/agent/providers/pi/agent.test.ts b/packages/server/src/server/agent/providers/pi/agent.test.ts
-index 56a3da852..3a5e6fbd4 100644
+index 56a3da852..05d578110 100644
 --- a/packages/server/src/server/agent/providers/pi/agent.test.ts
 +++ b/packages/server/src/server/agent/providers/pi/agent.test.ts
-@@ -2922,6 +2922,51 @@ describe("PiRpcAgentClient", () => {
+@@ -2922,6 +2922,99 @@ describe("PiRpcAgentClient", () => {
      ]);
    });
  
@@ -51,14 +51,88 @@ index 56a3da852..3a5e6fbd4 100644
 +    ]);
 +  });
 +
++  test("includes the known context usage in a failed auto compaction error", async () => {
++    const scheduler = new ManualUsagePollScheduler();
++    const { pi, session, events } = await createSession(new FakePi(), scheduler);
++    const fakeSession = pi.latestSession();
++    fakeSession.stats = { contextUsage: { contextWindow: 353_400, tokens: 341_200 } };
++
++    await session.startTurn("hello");
++    scheduler.poll();
++    await flushTurnScheduling();
++    fakeSession.emit({ type: "compaction_start", reason: "threshold" });
++    fakeSession.emit({
++      type: "compaction_end",
++      reason: "threshold",
++      errorMessage: "summarizer request failed",
++    });
++
++    expect(events.timelineItems()).toEqual([
++      { type: "compaction", status: "loading", trigger: "auto" },
++      { type: "compaction", status: "completed", trigger: "auto" },
++      {
++        type: "assistant_message",
++        text: "[Error] Auto compaction failed at 341,200 / 353,400 tokens: summarizer request failed",
++      },
++    ]);
++  });
++
++  test("includes the known context usage in an aborted auto compaction error", async () => {
++    const scheduler = new ManualUsagePollScheduler();
++    const { pi, session, events } = await createSession(new FakePi(), scheduler);
++    const fakeSession = pi.latestSession();
++    fakeSession.stats = { contextUsage: { contextWindow: 353_400, tokens: 341_200 } };
++
++    await session.startTurn("hello");
++    scheduler.poll();
++    await flushTurnScheduling();
++    fakeSession.emit({ type: "compaction_start", reason: "threshold" });
++    fakeSession.emit({ type: "compaction_end", reason: "threshold", aborted: true });
++
++    expect(events.timelineItems()).toEqual([
++      { type: "compaction", status: "loading", trigger: "auto" },
++      { type: "compaction", status: "completed", trigger: "auto" },
++      {
++        type: "assistant_message",
++        text: "[Error] Auto compaction aborted at 341,200 / 353,400 tokens",
++      },
++    ]);
++  });
++
    // fake-pi.ts is shared; compaction-gate tests patch the instance's compact with a
    // controllable gate so a prompt can be submitted while the compaction is in flight.
    interface HeldCompaction {
 diff --git a/packages/server/src/server/agent/providers/pi/agent.ts b/packages/server/src/server/agent/providers/pi/agent.ts
-index 09dab56d6..e7d7dc328 100644
+index 09dab56d6..868aa08e5 100644
 --- a/packages/server/src/server/agent/providers/pi/agent.ts
 +++ b/packages/server/src/server/agent/providers/pi/agent.ts
-@@ -2168,14 +2168,7 @@ export class PiRpcAgentSession implements AgentSession {
+@@ -30,6 +30,7 @@ import {
+   type AgentSlashCommand,
+   type AgentSlashCommandKind,
+   type AgentStreamEvent,
++  type AgentUsage,
+   type FetchCatalogOptions,
+   type SteerActiveTurnOptions,
+   type SteerResult,
+@@ -1152,6 +1153,9 @@ export class PiRpcAgentSession implements AgentSession {
+   private readonly currentModeId: string | null;
+   private readonly logger: Logger;
+   private readonly usagePoller: PiUsagePoller;
++  // Latest usage the poller published for this session; backs the context
++  // figures in auto-compaction failure messages.
++  private latestContextUsage: AgentUsage | null = null;
+   private closed = false;
+   private readonly closeController = new AbortController();
+   private readonly pendingExtensionHydrations = new Set<Promise<void>>();
+@@ -1175,6 +1179,7 @@ export class PiRpcAgentSession implements AgentSession {
+       scheduler: options.usagePollScheduler,
+       readStats: () => this.runtimeSession.getSessionStats(),
+       onUsage: (usage, turnId) => {
++        this.latestContextUsage = usage;
+         this.emit({
+           type: "usage_updated",
+           provider: this.provider,
+@@ -2168,14 +2173,7 @@ export class PiRpcAgentSession implements AgentSession {
          });
          return;
        case "compaction_end":
@@ -74,7 +148,7 @@ index 09dab56d6..e7d7dc328 100644
          return;
        case "auto_retry_start":
          this.emit({
-@@ -2236,6 +2229,42 @@ export class PiRpcAgentSession implements AgentSession {
+@@ -2236,6 +2234,52 @@ export class PiRpcAgentSession implements AgentSession {
      this.emitToolCallEvent(event.toolCallId, toolCall, status, result, error);
    }
  
@@ -102,9 +176,19 @@ index 09dab56d6..e7d7dc328 100644
 +      // compact context: ..."; don't duplicate them.
 +      return;
 +    }
++    // Pi's compaction events carry no token figures; fall back to the latest
++    // usage the poller published for this session.
++    const used = this.latestContextUsage?.contextWindowUsedTokens;
++    const max = this.latestContextUsage?.contextWindowMaxTokens;
++    let usageSuffix = "";
++    if (typeof used === "number" && typeof max === "number") {
++      usageSuffix = ` at ${used.toLocaleString("en-US")} / ${max.toLocaleString("en-US")} tokens`;
++    } else if (typeof used === "number") {
++      usageSuffix = ` at ${used.toLocaleString("en-US")} tokens`;
++    }
 +    const text = event.aborted
-+      ? "[Error] Auto compaction aborted"
-+      : `[Error] Auto compaction failed: ${event.errorMessage ?? "unknown error"}`;
++      ? `[Error] Auto compaction aborted${usageSuffix}`
++      : `[Error] Auto compaction failed${usageSuffix}: ${event.errorMessage ?? "unknown error"}`;
 +    this.emitCompactionTimeline({
 +      turnId,
 +      item: {
