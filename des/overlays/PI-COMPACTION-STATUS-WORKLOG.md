@@ -83,3 +83,57 @@ reason?: string; errorMessage?: string; aborted?: boolean }` — no `result` or
   untouched). Nothing committed.
 
 DONE: RED then GREEN, gates clean. Awaiting parent review.
+
+## 2026-10-05 — Follow-up Step 1: Survey for token figures on compaction failure (done)
+
+- Brief: extend 4e9ffeaaa's error lines with context fullness, e.g. "[Error] Auto
+  compaction failed at 341,200 / 353,400 tokens: <msg>". No protocol change.
+- compaction_start/compaction_end carry NO token fields (rpc-types.ts:194-195:
+  compaction_end is reason?/errorMessage?/aborted? only) — tokensBefore does not
+  exist. So the source is the adapter's latest known usage.
+- PiUsagePoller keeps lastUsage private with no getter; the adapter's onUsage
+  callback (agent.ts:1177) only re-emits usage_updated and stores nothing. Fix
+  shape: store the latest published usage in a new private field on
+  PiRpcAgentSession, read it in handleCompactionEnd. usage-poller.ts untouched.
+- Tests: 4e9ffeaaa's three at agent.test.ts:2927-2967 stay as the no-usage
+  regression guard (they assert today's text). Two new RED tests: failed and
+  aborted with known usage (fed via fakeSession.stats + ManualUsagePollScheduler,
+  same harness as the usage_updated tests at :2096).
+
+## 2026-10-05 — Follow-up Step 2: RED (done)
+
+- Added two tests after the aborted test in pi/agent.test.ts: "includes the known
+  context usage in a failed auto compaction error" and "...an aborted auto
+  compaction error", both feeding stats via fakeSession.stats +
+  ManualUsagePollScheduler + one poll mid-turn, then emitting
+  compaction_start/compaction_end. 4e9ffeaaa's three tests untouched as the
+  no-usage guard.
+- Run 1 (--bail=1): exit 1 — failed-with-usage test failed for the RIGHT reason:
+  received "[Error] Auto compaction failed: summarizer request failed", missing
+  the figures. RED confirmed.
+
+## 2026-10-05 — Follow-up Step 3: GREEN (done)
+
+- agent.ts: imported type AgentUsage; new field latestContextUsage
+  (AgentUsage | null) on PiRpcAgentSession; onUsage callback stores the latest
+  published usage before re-emitting; handleCompactionEnd builds a usageSuffix —
+  both used+max known: " at X / Y tokens"; used only: " at X tokens"; else "".
+  Applied to both failed and aborted auto texts; unknown figures keep today's
+  text byte-identical. Numbers via toLocaleString("en-US") → 341,200 / 353,400.
+  usage-poller.ts and protocol untouched.
+- Run 2 (--bail=1): exit 0 — 117/117 passed (115 old + 2 new).
+
+## 2026-10-05 — Follow-up Step 4: Gates + footprint (done)
+
+- Lint caught the nested-ternary usageSuffix (oxlint no-nested-ternary); refactored
+  to if/else, re-ran: test file 117/117 (exit 0), lint 0 warnings 0 errors.
+- `npm run typecheck`: exit 2, ONLY the known foreign error
+  (e2e/browser/plugin-timeline.spec.ts(238,79) TS2554) — ignored per brief.
+- format:files on the two files: already clean.
+- Footprint: this session changed only pi/agent.ts (+19/-2), pi/agent.test.ts
+  (+48), and this worklog. Other dirty files (CLAUDE.md, upgrade WORKING-LOG,
+  plugin-timeline.spec.ts, timeline/model.test.ts, deleted .claude skills,
+  .agents/commands/) pre-existed — untouched. Nothing staged, nothing committed.
+
+DONE: token figures on auto-compaction failure lines, RED→GREEN, gates clean.
+Awaiting parent review.

@@ -2967,6 +2967,54 @@ describe("PiRpcAgentClient", () => {
     ]);
   });
 
+  test("includes the known context usage in a failed auto compaction error", async () => {
+    const scheduler = new ManualUsagePollScheduler();
+    const { pi, session, events } = await createSession(new FakePi(), scheduler);
+    const fakeSession = pi.latestSession();
+    fakeSession.stats = { contextUsage: { contextWindow: 353_400, tokens: 341_200 } };
+
+    await session.startTurn("hello");
+    scheduler.poll();
+    await flushTurnScheduling();
+    fakeSession.emit({ type: "compaction_start", reason: "threshold" });
+    fakeSession.emit({
+      type: "compaction_end",
+      reason: "threshold",
+      errorMessage: "summarizer request failed",
+    });
+
+    expect(events.timelineItems()).toEqual([
+      { type: "compaction", status: "loading", trigger: "auto" },
+      { type: "compaction", status: "completed", trigger: "auto" },
+      {
+        type: "assistant_message",
+        text: "[Error] Auto compaction failed at 341,200 / 353,400 tokens: summarizer request failed",
+      },
+    ]);
+  });
+
+  test("includes the known context usage in an aborted auto compaction error", async () => {
+    const scheduler = new ManualUsagePollScheduler();
+    const { pi, session, events } = await createSession(new FakePi(), scheduler);
+    const fakeSession = pi.latestSession();
+    fakeSession.stats = { contextUsage: { contextWindow: 353_400, tokens: 341_200 } };
+
+    await session.startTurn("hello");
+    scheduler.poll();
+    await flushTurnScheduling();
+    fakeSession.emit({ type: "compaction_start", reason: "threshold" });
+    fakeSession.emit({ type: "compaction_end", reason: "threshold", aborted: true });
+
+    expect(events.timelineItems()).toEqual([
+      { type: "compaction", status: "loading", trigger: "auto" },
+      { type: "compaction", status: "completed", trigger: "auto" },
+      {
+        type: "assistant_message",
+        text: "[Error] Auto compaction aborted at 341,200 / 353,400 tokens",
+      },
+    ]);
+  });
+
   // fake-pi.ts is shared; compaction-gate tests patch the instance's compact with a
   // controllable gate so a prompt can be submitted while the compaction is in flight.
   interface HeldCompaction {
