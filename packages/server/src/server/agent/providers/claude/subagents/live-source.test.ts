@@ -511,6 +511,38 @@ describe("ClaudeTaskProtocolSource", () => {
     expect(source.cancelRunningForegroundTasks()).toEqual([]);
   });
 
+  it("completes the foreground subagents a successful turn was still running", () => {
+    const source = new ClaudeTaskProtocolSource();
+    source.observe(taskStarted());
+
+    expect(source.completeRunningForegroundTasks()).toEqual([
+      { kind: "status", id: "toolu_01DgLoPMW9", status: "completed" },
+    ]);
+    // Idempotent: the child is no longer running, so a second completion says nothing.
+    expect(source.completeRunningForegroundTasks()).toEqual([]);
+  });
+
+  it("leaves an already-settled subagent alone when the turn succeeds", () => {
+    const source = new ClaudeTaskProtocolSource();
+    source.observe(taskStarted());
+    source.observe(taskUpdated("completed"));
+
+    expect(source.completeRunningForegroundTasks()).toEqual([]);
+  });
+
+  it("does not complete a backgrounded subagent when the turn succeeds", () => {
+    const source = new ClaudeTaskProtocolSource();
+    source.observe(taskStarted());
+    source.observe({
+      type: "system",
+      subtype: "task_updated",
+      task_id: "a1730a6215e1f5cf6",
+      patch: { is_backgrounded: true },
+    } as unknown as SDKMessage);
+
+    expect(source.completeRunningForegroundTasks()).toEqual([]);
+  });
+
   it("still routes a backgrounded subagent that settles after the interrupt", () => {
     // The headline case: interrupt, continue, and the child that was told to outlive the turn
     // reports completion later. Wiping the routing table on cancel drops this on the floor and

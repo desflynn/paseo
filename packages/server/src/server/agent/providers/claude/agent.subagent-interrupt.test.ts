@@ -169,6 +169,64 @@ describe("subagent lifecycle across an interrupt", () => {
     await session.close();
   });
 
+  test("a legacy sidechain row is canceled with the turn that spawned it", async () => {
+    // A session whose CLI never announces tasks derives its subagent rows from sidechain frames.
+    // The interrupt terminalizes those rows too — a silent drop leaves one stuck "running"
+    // forever, and one stuck row pins the whole workspace "running".
+    const channel = buildOpenQueryMock();
+    queryFactory.mockImplementation(() => channel.query);
+    const session = await new ClaudeAgentClient({
+      logger: createTestLogger(),
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    }).createSession({ provider: "claude", cwd: process.cwd() });
+
+    const subagentEvents: ProviderSubagentInputEvent[] = [];
+    session.subscribe((event) => {
+      if (event.type === "provider_subagent") subagentEvents.push(event.event);
+    });
+
+    await session.startTurn("wait on a child");
+    channel.push({
+      type: "system",
+      subtype: "init",
+      session_id: "legacy-sidechain-session",
+      permissionMode: "default",
+    });
+    channel.push({
+      type: "stream_event",
+      parent_tool_use_id: null,
+      event: {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_legacy_task",
+          name: "Task",
+          input: { subagent_type: "Explore", description: "Legacy child" },
+        },
+      },
+    });
+    channel.push({
+      type: "assistant",
+      parent_tool_use_id: "toolu_legacy_task",
+      message: { content: [{ type: "text", text: "working" }] },
+    });
+    await vi.waitFor(() =>
+      expect(subagentEvents).toContainEqual(
+        expect.objectContaining({ id: "toolu_legacy_task", status: "running" }),
+      ),
+    );
+
+    await session.interrupt();
+
+    await vi.waitFor(() =>
+      expect(statuses(subagentEvents, "toolu_legacy_task")).toEqual(["running", "canceled"]),
+    );
+
+    await session.close();
+  });
+
   test("a foreground child is canceled with the turn that spawned it", async () => {
     const { session, subagentEvents } = await startInterruptibleTurn();
 

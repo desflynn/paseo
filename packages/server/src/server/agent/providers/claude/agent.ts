@@ -4190,6 +4190,16 @@ class ClaudeAgentSession implements AgentSession {
       ),
     ).map((event): AgentStreamEvent => ({ type: "provider_subagent", provider: "claude", event }));
     const routedId = canonicalSubagentId ?? parentToolUseId;
+    // A legacy sidechain exists only under a subagent tool call. Frames naming any other parent
+    // tool — an MCP call, Bash — belong to no child; deriving a row from them materializes a
+    // nameless "running" descriptor nothing will ever finish. Same recognition the task
+    // notification path uses.
+    if (
+      !canonicalSubagentId &&
+      !isClaudeSubagentToolName(this.toolUseCache.get(parentToolUseId)?.name)
+    ) {
+      return [];
+    }
     return [...runtimeEvents, ...this.sidechainTracker.handleMessage(message, routedId)];
   }
 
@@ -4479,6 +4489,14 @@ class ClaudeAgentSession implements AgentSession {
     const usage = this.convertUsage(message, message.modelUsage);
     if (message.subtype === "success") {
       events.push(...this.sidechainTracker.finishAll("completed"));
+      // The task protocol owns the descriptor, so finishAll no-ops once it is active — close the
+      // foreground children it declared itself, or a notification that never arrives leaves the
+      // row "running" forever.
+      for (const event of foldSubagentObservations(
+        this.taskProtocolSource.completeRunningForegroundTasks(),
+      )) {
+        events.push({ type: "provider_subagent", provider: "claude", event });
+      }
       // Built-in slash commands (e.g. /voice, /usage, "Unknown command: …")
       // run client-side in the Claude CLI with no model turn — output_tokens
       // is 0 and the user-visible text is carried in `result`. Surface it only
@@ -4763,7 +4781,12 @@ class ClaudeAgentSession implements AgentSession {
       }
     }
     this.toolUseCache.clear();
-    this.sidechainTracker.clear();
+    // A silent clear would strand every open legacy sidechain row at "running" — the store keeps
+    // the row, nothing ever terminalizes it, and one stuck row pins the workspace "running".
+    // Report the cancellation like the task protocol's cancel path does.
+    for (const event of this.sidechainTracker.finishAll("canceled")) {
+      this.pushEvent(event);
+    }
     // The task protocol's routing table is session-scoped, so it is deliberately NOT reset here:
     // the turn ended, the session did not. Wiping it would strand every task id the session still
     // holds — a backgrounded child that settles after the interrupt would find no descriptor to
