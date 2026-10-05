@@ -19,6 +19,10 @@ export type SpikeData = z.output<typeof spikeDataSchema>;
 
 const KINDS = semanticKinds.join("|");
 const PLAIN = new RegExp(`^\\{(${KINDS})\\}[ \\t]+(.+)$`);
+// Status strip: `{status}…{/status}` recognized only when the pair is the whole
+// line. Anything else stays literal text.
+const STATUS_TAG = "{status}";
+const STATUS_CLOSE_TAG = "{/status}";
 // `> [!kind] Title` card, `> [!kind]+ Title` foldable-open, `> [!kind]- Title`
 // foldable-collapsed.
 const CALLOUT = new RegExp(`^>\\s*\\[!(${KINDS})\\]([+-]?)(?:[ \\t]+(.*))?$`);
@@ -29,7 +33,7 @@ const PAIR = new RegExp(`^\\{(${KINDS})\\}`);
 const SEMANTIC_TAG = new RegExp(`\\{/?(${KINDS})\\}`, "g");
 const CARD_REFERENCE = /^\{card:([A-Za-z0-9_-]+)\}/;
 const ESCAPED_SEMANTIC_CODE = new RegExp(
-  `\\\\(?=(?:\\{(?:/?(?:${KINDS})|card:[A-Za-z0-9_-]+|/card)\\}|==|\\[!(?:${KINDS})\\]))`,
+  `\\\\(?=(?:\\{(?:/?(?:${KINDS})|/?status|card:[A-Za-z0-9_-]+|/card)\\}|==|\\[!(?:${KINDS})\\]))`,
   "g",
 );
 
@@ -141,6 +145,39 @@ function semanticTextRule(
   inline.children = [];
 
   state.push("semantic_text_close", "p", -1).block = true;
+  state.line = startLine + 1;
+  return true;
+}
+
+function semanticStatusRule(
+  state: MarkdownIt.StateBlock,
+  startLine: number,
+  _endLine: number,
+  silent: boolean,
+) {
+  const line = lineText(state, startLine);
+  if (!line.startsWith(STATUS_TAG)) return false;
+  const contentStart = STATUS_TAG.length;
+  const close = findUnescaped(line, STATUS_CLOSE_TAG, contentStart);
+  if (close < 0) return false;
+  const content = line.slice(contentStart, close);
+  // Whole line only: nothing but the closer may follow it.
+  if (line.slice(close + STATUS_CLOSE_TAG.length).trim() !== "") return false;
+  // Tags do not nest: semantic markup inside keeps the strip literal, like pairs.
+  if (hasUnescapedSemanticTag(content)) return false;
+
+  if (silent) return true;
+
+  const open = state.push("semantic_status_open", "p", 1);
+  open.block = true;
+  open.map = [startLine, startLine + 1];
+
+  const inline = state.push("inline", "", 0);
+  inline.content = content;
+  inline.map = [startLine, startLine + 1];
+  inline.children = [];
+
+  state.push("semantic_status_close", "p", -1).block = true;
   state.line = startLine + 1;
   return true;
 }
@@ -375,6 +412,10 @@ function annotateTableColumnWidths(state: MarkdownIt.StateCore): void {
 /** Semantic grammar + markdown extensions installed onto any parser instance. */
 export function applySemanticRules(parser: MarkdownIt, streaming = false): MarkdownIt {
   parser.block.ruler.before("blockquote", "semantic_callout", semanticCalloutRule);
+  // alt: a status line ends the paragraph above it, so it needs no blank line before it.
+  parser.block.ruler.before("paragraph", "semantic_status", semanticStatusRule, {
+    alt: ["paragraph"],
+  });
   parser.block.ruler.before("paragraph", "semantic_text", semanticTextRule);
   parser.inline.ruler.before("emphasis", "semantic_highlight", semanticHighlightRule);
   parser.inline.ruler.before("emphasis", "semantic_pair", semanticPairRule);

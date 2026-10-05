@@ -19,6 +19,8 @@ The plugin owns parsing and rendering on desktop and mobile.
 - Plain semantic colour: `{type} text` (line start, block treatment).
 - Paired inline colour: `{type}content{/type}`.
 - Semantic highlight: `=={type} text==`.
+- Status strip: `{status}one line{/status}` — the pair must be the whole line; inline, unclosed,
+  or multi-line stays literal. Renders the app's native info notification strip.
 - Foldable titled callouts: `> [!type]+ Title` and `> [!type]- Title`.
 - Inline and block math.
 - Footnotes.

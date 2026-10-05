@@ -1,6 +1,8 @@
 const KINDS = "ask|done|deferred|warning|danger|info|muted";
 const SEMANTIC_LINE = new RegExp("^[ \\t]*\\{(" + KINDS + ")\\}[ \\t]+.+$", "im");
 const SEMANTIC_CALLOUT = new RegExp("^[ \\t]*>\\s*\\[!(" + KINDS + ")\\]", "im");
+// Status strip: the `{status}…{/status}` pair as a whole line.
+const SEMANTIC_STATUS = /^[ \t]*\{status\}.*\{\/status\}[ \t]*$/im;
 // Paired inline tag, optionally with `==` around its content for highlight treatment.
 // Unsupported wrappers (success/warn) never appear in KINDS.
 const COMPLETE_MATH = /\$\$[\s\S]+?\$\$|\$(?:\\.|[^$\\\n])+\$/;
@@ -194,6 +196,7 @@ export function hasSemanticSourceSyntax(text: string): boolean {
     SEMANTIC_LINE.test(visible) ||
     hasSemanticHighlight(visible) ||
     SEMANTIC_CALLOUT.test(visible) ||
+    SEMANTIC_STATUS.test(visible) ||
     hasSemanticPair(visible) ||
     hasCardDefinition(visible) ||
     COMPLETE_MATH.test(visible) ||

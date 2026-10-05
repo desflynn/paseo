@@ -52,6 +52,8 @@ const CORPUS = [
   "",
   "{done} Shipped to production.", // semantic text
   "",
+  "{status}Spark seat boot: weights loaded{/status}", // semantic status strip
+  "",
   "Flag =={danger}rollback path missing== in the runbook.", // semantic highlight
   "",
   "Keys: <kbd>Cmd</kbd>+<kbd>K</kbd>", // kbd
@@ -105,6 +107,7 @@ test("golden corpus: every parity construct parses to its canonical tokens", () 
     "code_block",
     "semantic_callout_open",
     "semantic_text_open",
+    "semantic_status_open",
     "semantic_highlight_open",
     "math_inline",
     "math_block",

@@ -204,6 +204,40 @@ const calloutStyles = {
   body: { paddingHorizontal: 10, paddingBottom: 8 },
 } satisfies Record<string, ViewStyle>;
 
+// --- semantic status strip -----------------------------------------------------
+
+// Copied from the app's native info notification strip (message.tsx
+// notificationStylesheet): flat blue-300 tint, no border, no shadow.
+const STATUS_INFO_BACKGROUND = "rgba(147, 197, 253, 0.1)";
+const STATUS_ICON_BLUE = "#93c5fd";
+
+function SemanticStatus({ theme, children }: { theme: Theme; children: ReactNode }) {
+  return (
+    <View
+      style={[
+        statusStripStyles.card,
+        { borderRadius: theme.borderRadius.md, marginBottom: theme.spacing[1] },
+      ]}
+    >
+      <View style={{ paddingHorizontal: theme.spacing[3], paddingVertical: 10 }}>
+        <View style={[statusStripStyles.row, { gap: theme.spacing[2] }]}>
+          <View style={statusStripStyles.icon}>
+            <Icon name="Info" size={16} color={STATUS_ICON_BLUE} />
+          </View>
+          <View style={statusStripStyles.textContainer}>{children}</View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const statusStripStyles = {
+  card: { overflow: "hidden" as const, backgroundColor: STATUS_INFO_BACKGROUND },
+  row: { flexDirection: "row" as const, alignItems: "flex-start" as const },
+  icon: { flexShrink: 0 as const, height: 20, justifyContent: "center" as const },
+  textContainer: { flex: 1 },
+} satisfies Record<string, ViewStyle>;
+
 // --- kbd ----------------------------------------------------------------------
 
 function Kbd({ text, style }: { text: string; style: TextStyle }) {
@@ -250,8 +284,25 @@ function createSemanticMarkdownRules(ctx: { theme: Theme; dark: boolean }): Rend
         (p) =>
           p.type === "semantic_text" ||
           p.type === "semantic_highlight" ||
-          p.type === "semantic_inline",
+          p.type === "semantic_inline" ||
+          p.type === "semantic_status",
       );
+      if (owner?.type === "semantic_status") {
+        // Native strip messageText: foreground, theme base size, fixed 20 line height.
+        return (
+          <MarkdownInheritedText
+            key={node.key}
+            inheritedStyles={inheritedStyles}
+            textStyle={{
+              color: ctx.theme.colors.foreground,
+              fontSize: ctx.theme.fontSize.base,
+              lineHeight: 20,
+            }}
+          >
+            {node.content}
+          </MarkdownInheritedText>
+        );
+      }
       const kind = owner?.sourceMeta?.kind as SemanticKind | undefined;
       return (
         <MarkdownInheritedText
@@ -312,6 +363,11 @@ function createSemanticMarkdownRules(ctx: { theme: Theme; dark: boolean }): Rend
         </MarkdownInheritedText>
       );
     },
+    semantic_status: (node: ASTNode, children: ReactNode[], _p: ASTNode[], _s: MarkdownStyles) => (
+      <SemanticStatus key={node.key} theme={ctx.theme}>
+        {children}
+      </SemanticStatus>
+    ),
     semantic_callout: (node: ASTNode, children: ReactNode[], _p: ASTNode[], _s: MarkdownStyles) => {
       const kind = (node.sourceMeta?.kind as SemanticKind) ?? "info";
       return (

@@ -189,6 +189,64 @@ test("callout bodies compose with math and kbd", () => {
   assert.ok(tokens.some((token) => token.type === "math_inline"));
 });
 
+// --- status strip ------------------------------------------------------------
+
+// `{status}…{/status}` is a strip only when the pair is the whole line.
+// Anything else — mid-sentence, unclosed, multi-line — stays literal.
+
+test("whole-line status pair becomes a semantic_status strip node", () => {
+  const tokens = tokenTypes("{status}Spark seat boot: weights loaded{/status}");
+  assert.ok(find(tokens, "semantic_status_open"));
+  const inline = tokens.find((token) => token.type === "inline");
+  assert.equal(inline?.content, "Spark seat boot: weights loaded");
+});
+
+test("status line right after a text line still becomes a strip", () => {
+  const tokens = tokenTypes("Booting the Spark seat.\n{status}weights loaded{/status}");
+  assert.ok(find(tokens, "semantic_status_open"));
+});
+
+test("status strip claims the message for the transformer", () => {
+  assert.deepEqual(parseSpike("{status}weights loaded{/status}"), {
+    text: "{status}weights loaded{/status}",
+  });
+});
+
+test("inline status tag mid-sentence stays literal", () => {
+  const tokens = tokenTypes("Boot {status}weights loaded{/status} continues.");
+  assert.equal(find(tokens, "semantic_status_open"), undefined);
+});
+
+test("unclosed status tag stays literal", () => {
+  const tokens = tokenTypes("{status}weights loading");
+  assert.equal(find(tokens, "semantic_status_open"), undefined);
+});
+
+test("multi-line status pair stays literal", () => {
+  const tokens = tokenTypes("{status}line one\nline two{/status}");
+  assert.equal(find(tokens, "semantic_status_open"), undefined);
+});
+
+test("escaped status tags stay literal", () => {
+  const tokens = tokenTypes("\\{status}weights loaded\\{/status}");
+  assert.equal(find(tokens, "semantic_status_open"), undefined);
+});
+
+test("status content holding another semantic tag stays literal, inner tag parses", () => {
+  const tokens = tokenTypes("{status}{done}loaded{/done}{/status}");
+  assert.equal(find(tokens, "semantic_status_open"), undefined);
+  const flat = tokens.flatMap((token) => [token].concat(token.children ?? []));
+  assert.ok(flat.some((token) => token.type === "semantic_inline_open"));
+});
+
+test("status content keeps inline markdown", () => {
+  const tokens = tokenTypes("{status}boot **fast** mode{/status}");
+  const inline = tokens.find(
+    (token) => token.type === "inline" && token.content === "boot **fast** mode",
+  );
+  assert.ok(inline?.children?.some((child) => child.type === "strong_open"));
+});
+
 // --- numberFootnotes unit edge ---------------------------------------------
 
 test("numberFootnotes walks inline children", () => {
