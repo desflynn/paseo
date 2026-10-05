@@ -2922,6 +2922,51 @@ describe("PiRpcAgentClient", () => {
     ]);
   });
 
+  test("reports an auto compaction as completed when no failure is reported", async () => {
+    const { pi, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    fakeSession.emit({ type: "compaction_start", reason: "threshold" });
+    fakeSession.emit({ type: "compaction_end", reason: "threshold" });
+
+    expect(events.timelineItems()).toEqual([
+      { type: "compaction", status: "loading", trigger: "auto" },
+      { type: "compaction", status: "completed", trigger: "auto" },
+    ]);
+  });
+
+  test("surfaces a failed auto compaction as an error timeline item", async () => {
+    const { pi, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    fakeSession.emit({ type: "compaction_start", reason: "threshold" });
+    fakeSession.emit({
+      type: "compaction_end",
+      reason: "threshold",
+      errorMessage: "summarizer request failed",
+    });
+
+    expect(events.timelineItems()).toEqual([
+      { type: "compaction", status: "loading", trigger: "auto" },
+      { type: "compaction", status: "completed", trigger: "auto" },
+      {
+        type: "assistant_message",
+        text: "[Error] Auto compaction failed: summarizer request failed",
+      },
+    ]);
+  });
+
+  test("surfaces an aborted auto compaction as an error timeline item", async () => {
+    const { pi, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    fakeSession.emit({ type: "compaction_start", reason: "threshold" });
+    fakeSession.emit({ type: "compaction_end", reason: "threshold", aborted: true });
+
+    expect(events.timelineItems()).toEqual([
+      { type: "compaction", status: "loading", trigger: "auto" },
+      { type: "compaction", status: "completed", trigger: "auto" },
+      { type: "assistant_message", text: "[Error] Auto compaction aborted" },
+    ]);
+  });
+
   // fake-pi.ts is shared; compaction-gate tests patch the instance's compact with a
   // controllable gate so a prompt can be submitted while the compaction is in flight.
   interface HeldCompaction {

@@ -2168,14 +2168,7 @@ export class PiRpcAgentSession implements AgentSession {
         });
         return;
       case "compaction_end":
-        this.emitCompactionTimeline({
-          turnId,
-          item: {
-            type: "compaction",
-            status: "completed",
-            trigger: event.reason === "manual" ? "manual" : "auto",
-          },
-        });
+        this.handleCompactionEnd(event, turnId);
         return;
       case "auto_retry_start":
         this.emit({
@@ -2234,6 +2227,42 @@ export class PiRpcAgentSession implements AgentSession {
       result,
     });
     this.emitToolCallEvent(event.toolCallId, toolCall, status, result, error);
+  }
+
+  private handleCompactionEnd(
+    event: Extract<PiAgentSessionEvent, { type: "compaction_end" }>,
+    turnId: string | undefined,
+  ): void {
+    const trigger = event.reason === "manual" ? "manual" : "auto";
+    const failed = event.errorMessage !== undefined || event.aborted === true;
+    // The protocol compaction item has no failure status (status is "loading" |
+    // "completed"), so a failed or aborted compaction closes its loading item
+    // the same way as a successful one and the failure is surfaced through the
+    // error item below instead.
+    this.emitCompactionTimeline({
+      turnId,
+      item: {
+        type: "compaction",
+        status: "completed",
+        trigger,
+      },
+    });
+    if (!failed || trigger === "manual") {
+      // Successful compactions need nothing further. Manual failures already
+      // surface through the compact RPC catch path as "[Error] Failed to
+      // compact context: ..."; don't duplicate them.
+      return;
+    }
+    const text = event.aborted
+      ? "[Error] Auto compaction aborted"
+      : `[Error] Auto compaction failed: ${event.errorMessage ?? "unknown error"}`;
+    this.emitCompactionTimeline({
+      turnId,
+      item: {
+        type: "assistant_message",
+        text,
+      },
+    });
   }
 
   private emitCompactionTimeline(input: {

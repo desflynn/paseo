@@ -138,3 +138,10 @@ Last verified: written against `0.10.3-df` at 2419f0e5b (2026-10-05).
 - The Pi provider adds `--approve` only when the cwd is a git worktree under
   `$PASEO_HOME/worktrees` and Pi already trusts its source checkout (`~/.pi/agent/trust.json`,
   nearest decision wins, as in Pi's `trust-manager.js`). The file is only read.
+
+## 8. Pi: show failed auto compactions
+
+- Patch: `pi-compaction-status.patch`. Worklog: `PI-COMPACTION-STATUS-WORKLOG.md`.
+- `compaction_end` with `errorMessage` or `aborted: true` still closes the loading item, and a
+  failed auto compaction also adds `[Error] Auto compaction failed: <msg>` or `... aborted`. The
+  protocol status stays `loading | completed`, so old apps keep working.
