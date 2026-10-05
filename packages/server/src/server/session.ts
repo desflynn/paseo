@@ -8186,6 +8186,12 @@ export class Session {
     }
 
     const agentId = resolved.agentId;
+    if (!this.agentManager.getAgent(agentId)) {
+      // A reload removes the agent from the live map for its whole duration;
+      // wait it out so the stored record's pre-reload status is not served as
+      // the wait result.
+      await this.agentManager.waitForAgentReload(agentId);
+    }
     const live = this.agentManager.getAgent(agentId);
     if (!live) {
       const record = await this.agentStorage.get(agentId);

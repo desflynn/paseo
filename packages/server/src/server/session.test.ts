@@ -6140,3 +6140,87 @@ describe("agent-created SUB workspace label overlay", () => {
     }
   });
 });
+
+test("wait_for_finish during an in-flight reload waits for the reload instead of serving the stored error", async () => {
+  const agentId = "22222222-2222-4222-8222-222222222222";
+  let releaseReload: () => void = () => {};
+  const reloadSettled = new Promise<void>((resolve) => {
+    releaseReload = resolve;
+  });
+
+  const liveAgent = {
+    id: agentId,
+    provider: "codex",
+    cwd: "/tmp/work",
+    config: {},
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lifecycle: "idle",
+    currentModeId: null,
+    availableModes: [],
+    pendingPermissions: new Map(),
+    persistence: null,
+    historyPrimed: true,
+    lastUserMessageAt: null,
+    activeTurnId: null,
+    activeTurnStartedAt: null,
+    attention: { requiresAttention: false },
+    foregroundTurnWaiters: new Set(),
+    finalizedForegroundTurnIds: new Set(),
+    unsubscribeSession: null,
+    labels: {},
+    capabilities: {},
+    session: {},
+  } as unknown as NonNullable<ReturnType<SessionOptions["agentManager"]["getAgent"]>>;
+
+  const getAgent = vi.fn(
+    () => null as NonNullable<ReturnType<SessionOptions["agentManager"]["getAgent"]>> | null,
+  );
+  getAgent.mockReturnValueOnce(null).mockReturnValue(liveAgent);
+
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      listAgents: vi.fn(() => [liveAgent]),
+      getAgent,
+      waitForAgentReload: vi.fn(() => reloadSettled),
+      waitForAgentEvent: vi.fn(async () => ({
+        status: "idle",
+        permission: null,
+        lastMessage: "post-reload answer",
+      })),
+    },
+    agentStorage: {
+      get: vi.fn().mockResolvedValue({
+        id: agentId,
+        provider: "codex",
+        cwd: "/tmp/work",
+        createdAt: new Date().toISOString(),
+        lastStatus: "error",
+        lastError: "Pi RPC process is closed",
+        internal: false,
+      }),
+    },
+  });
+
+  const waitRequest = session.handleMessage({
+    type: "wait_for_finish_request",
+    requestId: "wait-during-reload",
+    agentId,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  // The reload is still in flight: no response may be served from the stored
+  // record's pre-reload error status.
+  expect(findByType(messages, "wait_for_finish_response")).toBeUndefined();
+
+  releaseReload();
+  await waitRequest;
+
+  const response = findByType(messages, "wait_for_finish_response");
+  expect(response?.payload.requestId).toBe("wait-during-reload");
+  expect(response?.payload.status).toBe("idle");
+  expect(response?.payload.error).toBeNull();
+  expect(response?.payload.lastMessage).toBe("post-reload answer");
+});

@@ -385,6 +385,35 @@ function resolveInitialAttention(input: AttentionState | undefined): AttentionSt
   };
 }
 
+/**
+ * True when a stored failure is the "<name> process is closed" error produced
+ * when an RPC session's process is closed (jsonl-rpc-process.ts). During a
+ * reload that failure is caused by the reload closing the old process out from
+ * under an in-flight turn, not by a genuine turn failure.
+ */
+function isProcessClosedErrorMessage(lastError: string | undefined): boolean {
+  return lastError?.endsWith("process is closed") ?? false;
+}
+
+/**
+ * A "… process is closed" failure is the reload closing the old process, not a
+ * genuine agent error; carrying it (and its error attention) into the restored
+ * agent immortalizes the reload artifact across further reloads.
+ */
+function resolvePreservedFailureState(existing: {
+  lastError?: string;
+  attention: AttentionState;
+}): { lastError: string | undefined; attention: AttentionState } {
+  if (!isProcessClosedErrorMessage(existing.lastError)) {
+    return { lastError: existing.lastError, attention: existing.attention };
+  }
+  const attention: AttentionState =
+    existing.attention.requiresAttention && existing.attention.attentionReason === "error"
+      ? { requiresAttention: false }
+      : existing.attention;
+  return { lastError: undefined, attention };
+}
+
 interface StreamEventFlags {
   shouldDispatchEvent: boolean;
   shouldNotifyWaiters: boolean;
@@ -1173,6 +1202,16 @@ export class AgentManager {
     await this.inFlightAgentCloses?.get(agentId)?.catch(() => undefined);
   }
 
+  /**
+   * Resolves once any in-flight lifecycle mutation (reload, close, archive)
+   * for the agent settles. A reload keeps the agent out of the live map for
+   * its whole duration, so callers about to fall back to the stored record
+   * must wait first or they serve a pre-reload status as current.
+   */
+  async waitForAgentReload(agentId: string): Promise<void> {
+    await this.lifecycleMutationTails.get(agentId);
+  }
+
   getTimeline(id: string): AgentTimelineItem[] {
     this.requireAgent(id);
     return this.timelineStore.getItems(id);
@@ -1519,8 +1558,8 @@ export class AgentManager {
     const rehydrateFromDisk = options?.rehydrateFromDisk ?? false;
     const preservedHistoryPrimed = existing.historyPrimed;
     const preservedLastUsage = existing.lastUsage;
-    const preservedLastError = existing.lastError;
-    const preservedAttention = existing.attention;
+    const { lastError: preservedLastError, attention: preservedAttention } =
+      resolvePreservedFailureState(existing);
     const handle = existing.persistence;
     const provider = handle?.provider ?? existing.provider;
     const client = this.requireClient(provider);

@@ -1,0 +1,314 @@
+diff --git a/packages/server/src/server/agent/agent-manager.test.ts b/packages/server/src/server/agent/agent-manager.test.ts
+index 2f9cd425a..5392d7323 100644
+--- a/packages/server/src/server/agent/agent-manager.test.ts
++++ b/packages/server/src/server/agent/agent-manager.test.ts
+@@ -2582,6 +2582,132 @@ test("failed reload retains the closed agent for a later resume", async () => {
+   }
+ });
+ 
++test("waitForAgentReload resolves only after an in-flight reload settles", async () => {
++  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-wait-reload-accessor-"));
++  const storage = new AgentStorage(join(workdir, "agents"), logger);
++  const client = new HeldReloadCloseClient();
++  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
++  try {
++    const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
++      workspaceId: undefined,
++    });
++    const reloading = manager.reloadAgentSession(created.id);
++    await client.waitForCloseToStart();
++
++    let waited = false;
++    const waiting = manager.waitForAgentReload(created.id).then(() => {
++      waited = true;
++      return true;
++    });
++    await new Promise<void>((resolve) => setImmediate(resolve));
++    expect(waited).toBe(false);
++
++    client.finishClosing();
++    await Promise.all([reloading, waiting]);
++    expect(waited).toBe(true);
++    await manager.closeAgent(created.id);
++  } finally {
++    client.finishClosing();
++    await storage.flush();
++    rmSync(workdir, { recursive: true, force: true });
++  }
++});
++
++test("reload does not carry a process-closed error its own close caused into the restored agent", async () => {
++  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-reload-close-error-"));
++  const storage = new AgentStorage(join(workdir, "agents"), logger);
++  let capturedSession: TestAgentSession | null = null;
++
++  class LiveEventClient extends TestAgentClient {
++    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
++      capturedSession = new TestAgentSession(config);
++      return capturedSession;
++    }
++  }
++
++  const manager = new AgentManager({
++    clients: { codex: new LiveEventClient() },
++    registry: storage,
++    logger,
++  });
++  try {
++    const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
++      workspaceId: undefined,
++    });
++    capturedSession!.pushEvent({
++      type: "turn_failed",
++      provider: "codex",
++      turnId: "reload-victim-turn",
++      error: "Pi RPC process is closed",
++    });
++    await vi.waitFor(() => {
++      const failed = manager.getAgent(created.id);
++      expect(failed?.lastError).toBe("Pi RPC process is closed");
++      expect(failed?.attention).toMatchObject({
++        requiresAttention: true,
++        attentionReason: "error",
++      });
++    });
++
++    const reloaded = await manager.reloadAgentSession(created.id);
++    expect(reloaded.lastError).toBeUndefined();
++    expect(reloaded.attention).toEqual({ requiresAttention: false });
++    await manager.closeAgent(created.id);
++  } finally {
++    await storage.flush();
++    rmSync(workdir, { recursive: true, force: true });
++  }
++});
++
++test("reload still preserves a genuine pre-reload error", async () => {
++  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-reload-keep-error-"));
++  const storage = new AgentStorage(join(workdir, "agents"), logger);
++  let capturedSession: TestAgentSession | null = null;
++
++  class LiveEventClient extends TestAgentClient {
++    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
++      capturedSession = new TestAgentSession(config);
++      return capturedSession;
++    }
++  }
++
++  const manager = new AgentManager({
++    clients: { codex: new LiveEventClient() },
++    registry: storage,
++    logger,
++  });
++  try {
++    const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
++      workspaceId: undefined,
++    });
++    capturedSession!.pushEvent({
++      type: "turn_failed",
++      provider: "codex",
++      turnId: "genuine-failure-turn",
++      error: "disk full on provider host",
++    });
++    await vi.waitFor(() => {
++      const failed = manager.getAgent(created.id);
++      expect(failed?.lastError).toBe("disk full on provider host");
++      expect(failed?.attention).toMatchObject({
++        requiresAttention: true,
++        attentionReason: "error",
++      });
++    });
++
++    const reloaded = await manager.reloadAgentSession(created.id);
++    expect(reloaded.lastError).toBe("disk full on provider host");
++    expect(reloaded.attention).toMatchObject({
++      requiresAttention: true,
++      attentionReason: "error",
++    });
++    await manager.closeAgent(created.id);
++  } finally {
++    await storage.flush();
++    rmSync(workdir, { recursive: true, force: true });
++  }
++});
++
+ test.each(["hang", "reject"])(
+   "reload does not resume when the previous session close fails: %s",
+   async (failure) => {
+diff --git a/packages/server/src/server/agent/agent-manager.ts b/packages/server/src/server/agent/agent-manager.ts
+index 87d3b290a..1a093fd3a 100644
+--- a/packages/server/src/server/agent/agent-manager.ts
++++ b/packages/server/src/server/agent/agent-manager.ts
+@@ -385,6 +385,35 @@ function resolveInitialAttention(input: AttentionState | undefined): AttentionSt
+   };
+ }
+ 
++/**
++ * True when a stored failure is the "<name> process is closed" error produced
++ * when an RPC session's process is closed (jsonl-rpc-process.ts). During a
++ * reload that failure is caused by the reload closing the old process out from
++ * under an in-flight turn, not by a genuine turn failure.
++ */
++function isProcessClosedErrorMessage(lastError: string | undefined): boolean {
++  return lastError?.endsWith("process is closed") ?? false;
++}
++
++/**
++ * A "… process is closed" failure is the reload closing the old process, not a
++ * genuine agent error; carrying it (and its error attention) into the restored
++ * agent immortalizes the reload artifact across further reloads.
++ */
++function resolvePreservedFailureState(existing: {
++  lastError?: string;
++  attention: AttentionState;
++}): { lastError: string | undefined; attention: AttentionState } {
++  if (!isProcessClosedErrorMessage(existing.lastError)) {
++    return { lastError: existing.lastError, attention: existing.attention };
++  }
++  const attention: AttentionState =
++    existing.attention.requiresAttention && existing.attention.attentionReason === "error"
++      ? { requiresAttention: false }
++      : existing.attention;
++  return { lastError: undefined, attention };
++}
++
+ interface StreamEventFlags {
+   shouldDispatchEvent: boolean;
+   shouldNotifyWaiters: boolean;
+@@ -1173,6 +1202,16 @@ export class AgentManager {
+     await this.inFlightAgentCloses?.get(agentId)?.catch(() => undefined);
+   }
+ 
++  /**
++   * Resolves once any in-flight lifecycle mutation (reload, close, archive)
++   * for the agent settles. A reload keeps the agent out of the live map for
++   * its whole duration, so callers about to fall back to the stored record
++   * must wait first or they serve a pre-reload status as current.
++   */
++  async waitForAgentReload(agentId: string): Promise<void> {
++    await this.lifecycleMutationTails.get(agentId);
++  }
++
+   getTimeline(id: string): AgentTimelineItem[] {
+     this.requireAgent(id);
+     return this.timelineStore.getItems(id);
+@@ -1519,8 +1558,8 @@ export class AgentManager {
+     const rehydrateFromDisk = options?.rehydrateFromDisk ?? false;
+     const preservedHistoryPrimed = existing.historyPrimed;
+     const preservedLastUsage = existing.lastUsage;
+-    const preservedLastError = existing.lastError;
+-    const preservedAttention = existing.attention;
++    const { lastError: preservedLastError, attention: preservedAttention } =
++      resolvePreservedFailureState(existing);
+     const handle = existing.persistence;
+     const provider = handle?.provider ?? existing.provider;
+     const client = this.requireClient(provider);
+diff --git a/packages/server/src/server/session.test.ts b/packages/server/src/server/session.test.ts
+index 7eddaea7d..44e9732cd 100644
+--- a/packages/server/src/server/session.test.ts
++++ b/packages/server/src/server/session.test.ts
+@@ -6140,3 +6140,87 @@ describe("agent-created SUB workspace label overlay", () => {
+     }
+   });
+ });
++
++test("wait_for_finish during an in-flight reload waits for the reload instead of serving the stored error", async () => {
++  const agentId = "22222222-2222-4222-8222-222222222222";
++  let releaseReload: () => void = () => {};
++  const reloadSettled = new Promise<void>((resolve) => {
++    releaseReload = resolve;
++  });
++
++  const liveAgent = {
++    id: agentId,
++    provider: "codex",
++    cwd: "/tmp/work",
++    config: {},
++    createdAt: new Date(),
++    updatedAt: new Date(),
++    lifecycle: "idle",
++    currentModeId: null,
++    availableModes: [],
++    pendingPermissions: new Map(),
++    persistence: null,
++    historyPrimed: true,
++    lastUserMessageAt: null,
++    activeTurnId: null,
++    activeTurnStartedAt: null,
++    attention: { requiresAttention: false },
++    foregroundTurnWaiters: new Set(),
++    finalizedForegroundTurnIds: new Set(),
++    unsubscribeSession: null,
++    labels: {},
++    capabilities: {},
++    session: {},
++  } as unknown as NonNullable<ReturnType<SessionOptions["agentManager"]["getAgent"]>>;
++
++  const getAgent = vi.fn(
++    () => null as NonNullable<ReturnType<SessionOptions["agentManager"]["getAgent"]>> | null,
++  );
++  getAgent.mockReturnValueOnce(null).mockReturnValue(liveAgent);
++
++  const messages: SessionOutboundMessage[] = [];
++  const session = createSessionForTest({
++    messages,
++    agentManager: {
++      listAgents: vi.fn(() => [liveAgent]),
++      getAgent,
++      waitForAgentReload: vi.fn(() => reloadSettled),
++      waitForAgentEvent: vi.fn(async () => ({
++        status: "idle",
++        permission: null,
++        lastMessage: "post-reload answer",
++      })),
++    },
++    agentStorage: {
++      get: vi.fn().mockResolvedValue({
++        id: agentId,
++        provider: "codex",
++        cwd: "/tmp/work",
++        createdAt: new Date().toISOString(),
++        lastStatus: "error",
++        lastError: "Pi RPC process is closed",
++        internal: false,
++      }),
++    },
++  });
++
++  const waitRequest = session.handleMessage({
++    type: "wait_for_finish_request",
++    requestId: "wait-during-reload",
++    agentId,
++  });
++  await new Promise<void>((resolve) => setImmediate(resolve));
++
++  // The reload is still in flight: no response may be served from the stored
++  // record's pre-reload error status.
++  expect(findByType(messages, "wait_for_finish_response")).toBeUndefined();
++
++  releaseReload();
++  await waitRequest;
++
++  const response = findByType(messages, "wait_for_finish_response");
++  expect(response?.payload.requestId).toBe("wait-during-reload");
++  expect(response?.payload.status).toBe("idle");
++  expect(response?.payload.error).toBeNull();
++  expect(response?.payload.lastMessage).toBe("post-reload answer");
++});
+diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
+index 6926ea4e7..066db6fb1 100644
+--- a/packages/server/src/server/session.ts
++++ b/packages/server/src/server/session.ts
+@@ -8186,6 +8186,12 @@ export class Session {
+     }
+ 
+     const agentId = resolved.agentId;
++    if (!this.agentManager.getAgent(agentId)) {
++      // A reload removes the agent from the live map for its whole duration;
++      // wait it out so the stored record's pre-reload status is not served as
++      // the wait result.
++      await this.agentManager.waitForAgentReload(agentId);
++    }
+     const live = this.agentManager.getAgent(agentId);
+     if (!live) {
+       const record = await this.agentStorage.get(agentId);
