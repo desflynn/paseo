@@ -24,6 +24,12 @@ import type {
   PiSessionState,
   PiSessionStats,
 } from "./rpc-types.js";
+import {
+  readPiTrustFile,
+  resolveManagedWorktreeSource,
+  shouldApprovePiProject,
+  type PiTrustData,
+} from "./pi-project-trust.js";
 
 const DEFAULT_PI_COMMAND: [string, ...string[]] = [
   process.env.PI_COMMAND ?? process.env.PI_ACP_PI_COMMAND ?? "pi",
@@ -37,24 +43,36 @@ export interface PiCliRuntimeOptions {
   commandsRpcName?: string;
   requestTimeoutMs?: number;
   spawnProcess?: (launch: PiRuntimeLaunch) => ChildProcessWithoutNullStreams;
+  /**
+   * Resolve the source checkout when cwd is a Paseo-managed git worktree; null
+   * otherwise. Defaults to git-based detection under $PASEO_HOME/worktrees.
+   */
+  resolveWorktreeSource?: (cwd: string) => Promise<string | null>;
+  /** Read-only Pi trust data; undefined when missing/unreadable. Defaults to ~/.pi/agent/trust.json. */
+  readProjectTrust?: () => Promise<PiTrustData | undefined>;
 }
 
 export class PiCliRuntime implements PiRuntime {
   private readonly command: [string, ...string[]];
   private readonly commandsRpcName: string;
   private readonly spawnProcess?: (launch: PiRuntimeLaunch) => ChildProcessWithoutNullStreams;
+  private readonly resolveWorktreeSource: (cwd: string) => Promise<string | null>;
+  private readonly readProjectTrust: () => Promise<PiTrustData | undefined>;
 
   constructor(private readonly options: PiCliRuntimeOptions) {
     this.command = options.command ?? DEFAULT_PI_COMMAND;
     this.commandsRpcName = options.commandsRpcName ?? DEFAULT_COMMANDS_RPC_NAME;
     this.spawnProcess = options.spawnProcess;
+    this.resolveWorktreeSource = options.resolveWorktreeSource ?? resolveManagedWorktreeSource;
+    this.readProjectTrust = options.readProjectTrust ?? readPiTrustFile;
   }
 
   async startSession(input: PiStartSessionInput): Promise<PiRuntimeSession> {
+    const extraArgs = await this.resolveProjectApprovalArgs(input);
     const launch = buildPiLaunch({
       command: this.command,
       runtimeSettings: this.options.runtimeSettings,
-      session: input,
+      session: extraArgs.length > 0 ? { ...input, extraArgs } : input,
     });
     const [command, ...args] = launch.argv;
     const processLaunch: JsonlRpcLaunch = {
@@ -78,6 +96,35 @@ export class PiCliRuntime implements PiRuntime {
     }
     return new PiCliRuntimeSession(process, this.commandsRpcName);
   }
+
+  /**
+   * Pass --approve only when cwd is a Paseo-managed git worktree whose source
+   * checkout Pi itself already trusts (nearest decision in ~/.pi/agent/trust.json,
+   * Pi's own matching rule). Never writes trust state and never blocks the
+   * launch: any probe failure falls back to unchanged behaviour.
+   */
+  private async resolveProjectApprovalArgs(input: PiStartSessionInput): Promise<string[]> {
+    const extraArgs = [...(input.extraArgs ?? [])];
+    try {
+      if (!hasApproveFlag(this.command) && !hasApproveFlag(extraArgs)) {
+        const sourceCheckoutPath = await this.resolveWorktreeSource(input.cwd);
+        const trust = sourceCheckoutPath ? await this.readProjectTrust() : undefined;
+        if (shouldApprovePiProject({ cwd: input.cwd, sourceCheckoutPath, trust })) {
+          extraArgs.push("--approve");
+        }
+      }
+    } catch {
+      // Trust gating is best-effort; unchanged behaviour on any failure.
+    }
+    return extraArgs;
+  }
+}
+
+/** A custom profile may already pass an approval flag; never duplicate it. */
+function hasApproveFlag(args: readonly string[]): boolean {
+  return args.some(
+    (arg) => arg === "--approve" || arg === "-a" || arg === "--no-approve" || arg === "-na",
+  );
 }
 
 class PiCliRuntimeSession implements PiRuntimeSession {

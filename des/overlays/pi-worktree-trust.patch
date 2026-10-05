@@ -1,0 +1,411 @@
+diff --git a/packages/server/src/server/agent/providers/pi/cli-runtime.test.ts b/packages/server/src/server/agent/providers/pi/cli-runtime.test.ts
+index c178bb540..764398f29 100644
+--- a/packages/server/src/server/agent/providers/pi/cli-runtime.test.ts
++++ b/packages/server/src/server/agent/providers/pi/cli-runtime.test.ts
+@@ -5,6 +5,7 @@ import pino from "pino";
+ import { describe, expect, test, vi } from "vitest";
+ 
+ import { PiCliRuntime } from "./cli-runtime.js";
++import { shouldApprovePiProject, type PiTrustData } from "./pi-project-trust.js";
+ import type { PiRuntimeLaunch } from "./runtime.js";
+ 
+ type PiChild = ChildProcessWithoutNullStreams & {
+@@ -34,13 +35,22 @@ function createPiChild(): PiChild {
+ function createRuntime(
+   child: PiChild,
+   launches: PiRuntimeLaunch[] = [],
+-  options?: { commandsRpcName?: string; requestTimeoutMs?: number },
++  options?: {
++    commandsRpcName?: string;
++    requestTimeoutMs?: number;
++    resolveWorktreeSource?: (cwd: string) => Promise<string | null>;
++    readProjectTrust?: () => Promise<PiTrustData | undefined>;
++  },
+ ): PiCliRuntime {
+   return new PiCliRuntime({
+     logger: pino({ level: "silent" }),
+     command: ["pi"],
+     commandsRpcName: options?.commandsRpcName,
+     requestTimeoutMs: options?.requestTimeoutMs,
++    ...(options?.resolveWorktreeSource
++      ? { resolveWorktreeSource: options.resolveWorktreeSource }
++      : {}),
++    ...(options?.readProjectTrust ? { readProjectTrust: options.readProjectTrust } : {}),
+     spawnProcess: (launch) => {
+       launches.push(launch);
+       return child;
+@@ -537,3 +547,146 @@ describe("PiCliRuntime", () => {
+     await expect(session.abort()).resolves.toBeUndefined();
+   });
+ });
++
++describe("PiCliRuntime project trust approval", () => {
++  const worktreeCwd = "/paseo/worktrees/22hfpub1/child";
++  const sourceCheckout = "/repo/main";
++
++  test("passes --approve when the managed worktree's source checkout is trusted", async () => {
++    const child = createPiChild();
++    replyToCommands(child, () => ({}));
++    const launches: PiRuntimeLaunch[] = [];
++    const runtime = createRuntime(child, launches, {
++      resolveWorktreeSource: async () => sourceCheckout,
++      readProjectTrust: async () => ({ [sourceCheckout]: true }),
++    });
++
++    await runtime.startSession({ cwd: worktreeCwd });
++
++    expect(launches[0]?.argv).toContain("--approve");
++  });
++
++  test("omits --approve when the source checkout is not trusted", async () => {
++    const child = createPiChild();
++    replyToCommands(child, () => ({}));
++    const launches: PiRuntimeLaunch[] = [];
++    const runtime = createRuntime(child, launches, {
++      resolveWorktreeSource: async () => sourceCheckout,
++      readProjectTrust: async () => ({ [sourceCheckout]: false }),
++    });
++
++    await runtime.startSession({ cwd: worktreeCwd });
++
++    expect(launches[0]?.argv).not.toContain("--approve");
++  });
++
++  test("omits --approve for an ordinary trusted checkout that is not a managed worktree", async () => {
++    const child = createPiChild();
++    replyToCommands(child, () => ({}));
++    const launches: PiRuntimeLaunch[] = [];
++    const runtime = createRuntime(child, launches, {
++      resolveWorktreeSource: async () => null,
++      readProjectTrust: async () => ({ [worktreeCwd]: true }),
++    });
++
++    await runtime.startSession({ cwd: worktreeCwd });
++
++    expect(launches[0]?.argv).not.toContain("--approve");
++  });
++
++  test("omits --approve and still starts when the trust data is unreadable", async () => {
++    const child = createPiChild();
++    replyToCommands(child, () => ({}));
++    const launches: PiRuntimeLaunch[] = [];
++    const runtime = createRuntime(child, launches, {
++      resolveWorktreeSource: async () => sourceCheckout,
++      readProjectTrust: async () => {
++        throw new Error("EACCES: unreadable trust.json");
++      },
++    });
++
++    await runtime.startSession({ cwd: worktreeCwd });
++
++    expect(launches[0]?.argv).not.toContain("--approve");
++    expect(launches).toHaveLength(1);
++  });
++});
++
++describe("shouldApprovePiProject", () => {
++  test("approves when the source checkout itself is trusted", () => {
++    expect(
++      shouldApprovePiProject({
++        cwd: "/paseo/worktrees/22hfpub1/child",
++        sourceCheckoutPath: "/repo/main",
++        trust: { "/repo/main": true },
++      }),
++    ).toBe(true);
++  });
++
++  test("approves via nearest-ancestor trust of the source checkout", () => {
++    expect(
++      shouldApprovePiProject({
++        cwd: "/paseo/worktrees/22hfpub1/child",
++        sourceCheckoutPath: "/repo/main",
++        trust: { "/repo": true },
++      }),
++    ).toBe(true);
++  });
++
++  test("nearest decision wins over an ancestor", () => {
++    expect(
++      shouldApprovePiProject({
++        cwd: "/paseo/worktrees/22hfpub1/child",
++        sourceCheckoutPath: "/repo/main",
++        trust: { "/repo": false, "/repo/main": true },
++      }),
++    ).toBe(true);
++    expect(
++      shouldApprovePiProject({
++        cwd: "/paseo/worktrees/22hfpub1/child",
++        sourceCheckoutPath: "/repo/main",
++        trust: { "/repo": true, "/repo/main": false },
++      }),
++    ).toBe(false);
++  });
++
++  test("null entries are skipped like absent decisions", () => {
++    expect(
++      shouldApprovePiProject({
++        cwd: "/paseo/worktrees/22hfpub1/child",
++        sourceCheckoutPath: "/repo/main",
++        trust: { "/repo": null, "/": true },
++      }),
++    ).toBe(true);
++  });
++
++  test("never approves a plain checkout whose source path equals the cwd", () => {
++    expect(
++      shouldApprovePiProject({
++        cwd: "/repo/main",
++        sourceCheckoutPath: "/repo/main",
++        trust: { "/repo/main": true },
++      }),
++    ).toBe(false);
++  });
++
++  test("never approves without trust data", () => {
++    expect(
++      shouldApprovePiProject({
++        cwd: "/paseo/worktrees/22hfpub1/child",
++        sourceCheckoutPath: "/repo/main",
++        trust: undefined,
++      }),
++    ).toBe(false);
++  });
++
++  test("matches canonically normalised source paths", () => {
++    expect(
++      shouldApprovePiProject({
++        cwd: "/paseo/worktrees/22hfpub1/child",
++        sourceCheckoutPath: "/repo/main/",
++        trust: { "/repo/main": true },
++      }),
++    ).toBe(true);
++  });
++});
+diff --git a/packages/server/src/server/agent/providers/pi/cli-runtime.ts b/packages/server/src/server/agent/providers/pi/cli-runtime.ts
+index 0262ac13a..ccde85aa5 100644
+--- a/packages/server/src/server/agent/providers/pi/cli-runtime.ts
++++ b/packages/server/src/server/agent/providers/pi/cli-runtime.ts
+@@ -24,6 +24,12 @@ import type {
+   PiSessionState,
+   PiSessionStats,
+ } from "./rpc-types.js";
++import {
++  readPiTrustFile,
++  resolveManagedWorktreeSource,
++  shouldApprovePiProject,
++  type PiTrustData,
++} from "./pi-project-trust.js";
+ 
+ const DEFAULT_PI_COMMAND: [string, ...string[]] = [
+   process.env.PI_COMMAND ?? process.env.PI_ACP_PI_COMMAND ?? "pi",
+@@ -37,24 +43,36 @@ export interface PiCliRuntimeOptions {
+   commandsRpcName?: string;
+   requestTimeoutMs?: number;
+   spawnProcess?: (launch: PiRuntimeLaunch) => ChildProcessWithoutNullStreams;
++  /**
++   * Resolve the source checkout when cwd is a Paseo-managed git worktree; null
++   * otherwise. Defaults to git-based detection under $PASEO_HOME/worktrees.
++   */
++  resolveWorktreeSource?: (cwd: string) => Promise<string | null>;
++  /** Read-only Pi trust data; undefined when missing/unreadable. Defaults to ~/.pi/agent/trust.json. */
++  readProjectTrust?: () => Promise<PiTrustData | undefined>;
+ }
+ 
+ export class PiCliRuntime implements PiRuntime {
+   private readonly command: [string, ...string[]];
+   private readonly commandsRpcName: string;
+   private readonly spawnProcess?: (launch: PiRuntimeLaunch) => ChildProcessWithoutNullStreams;
++  private readonly resolveWorktreeSource: (cwd: string) => Promise<string | null>;
++  private readonly readProjectTrust: () => Promise<PiTrustData | undefined>;
+ 
+   constructor(private readonly options: PiCliRuntimeOptions) {
+     this.command = options.command ?? DEFAULT_PI_COMMAND;
+     this.commandsRpcName = options.commandsRpcName ?? DEFAULT_COMMANDS_RPC_NAME;
+     this.spawnProcess = options.spawnProcess;
++    this.resolveWorktreeSource = options.resolveWorktreeSource ?? resolveManagedWorktreeSource;
++    this.readProjectTrust = options.readProjectTrust ?? readPiTrustFile;
+   }
+ 
+   async startSession(input: PiStartSessionInput): Promise<PiRuntimeSession> {
++    const extraArgs = await this.resolveProjectApprovalArgs(input);
+     const launch = buildPiLaunch({
+       command: this.command,
+       runtimeSettings: this.options.runtimeSettings,
+-      session: input,
++      session: extraArgs.length > 0 ? { ...input, extraArgs } : input,
+     });
+     const [command, ...args] = launch.argv;
+     const processLaunch: JsonlRpcLaunch = {
+@@ -78,6 +96,35 @@ export class PiCliRuntime implements PiRuntime {
+     }
+     return new PiCliRuntimeSession(process, this.commandsRpcName);
+   }
++
++  /**
++   * Pass --approve only when cwd is a Paseo-managed git worktree whose source
++   * checkout Pi itself already trusts (nearest decision in ~/.pi/agent/trust.json,
++   * Pi's own matching rule). Never writes trust state and never blocks the
++   * launch: any probe failure falls back to unchanged behaviour.
++   */
++  private async resolveProjectApprovalArgs(input: PiStartSessionInput): Promise<string[]> {
++    const extraArgs = [...(input.extraArgs ?? [])];
++    try {
++      if (!hasApproveFlag(this.command) && !hasApproveFlag(extraArgs)) {
++        const sourceCheckoutPath = await this.resolveWorktreeSource(input.cwd);
++        const trust = sourceCheckoutPath ? await this.readProjectTrust() : undefined;
++        if (shouldApprovePiProject({ cwd: input.cwd, sourceCheckoutPath, trust })) {
++          extraArgs.push("--approve");
++        }
++      }
++    } catch {
++      // Trust gating is best-effort; unchanged behaviour on any failure.
++    }
++    return extraArgs;
++  }
++}
++
++/** A custom profile may already pass an approval flag; never duplicate it. */
++function hasApproveFlag(args: readonly string[]): boolean {
++  return args.some(
++    (arg) => arg === "--approve" || arg === "-a" || arg === "--no-approve" || arg === "-na",
++  );
+ }
+ 
+ class PiCliRuntimeSession implements PiRuntimeSession {
+diff --git a/packages/server/src/server/agent/providers/pi/pi-project-trust.ts b/packages/server/src/server/agent/providers/pi/pi-project-trust.ts
+new file mode 100644
+index 000000000..3e5441e9e
+--- /dev/null
++++ b/packages/server/src/server/agent/providers/pi/pi-project-trust.ts
+@@ -0,0 +1,131 @@
++import { execFile } from "node:child_process";
++import { realpathSync } from "node:fs";
++import { readFile } from "node:fs/promises";
++import { homedir } from "node:os";
++import { dirname, join, resolve, sep } from "node:path";
++import { promisify } from "node:util";
++
++import { resolvePaseoHome } from "../../../paseo-home.js";
++
++const execFileAsync = promisify(execFile);
++
++/** Shape of Pi's ~/.pi/agent/trust.json: canonical directory path -> saved decision. */
++export type PiTrustData = Record<string, boolean | null>;
++
++/**
++ * Mirror of Pi's trust-manager normalizeCwd (pi dist/core/trust-manager.js):
++ * the canonical real path, or the resolved path when the entry does not exist.
++ */
++function canonicalDir(dir: string): string {
++  try {
++    return realpathSync(dir);
++  } catch {
++    return resolve(dir);
++  }
++}
++
++/**
++ * Pi's findNearestTrustEntry: walk from the directory upward and return the
++ * nearest saved decision. `null` entries are skipped like absent ones.
++ */
++function findNearestPiTrustDecision(trust: PiTrustData, dir: string): boolean | null {
++  let current = canonicalDir(dir);
++  for (;;) {
++    const value = trust[current];
++    if (value === true || value === false) {
++      return value;
++    }
++    const parent = dirname(current);
++    if (parent === current) {
++      return null;
++    }
++    current = parent;
++  }
++}
++
++export interface PiApproveDecisionInput {
++  /** Agent cwd; the caller only passes a source path when this is a managed worktree. */
++  cwd: string;
++  /** Source checkout of that worktree, or null/undefined when cwd is not one. */
++  sourceCheckoutPath: string | null | undefined;
++  /** Parsed Pi trust store, or undefined when missing/unreadable. */
++  trust: PiTrustData | undefined;
++}
++
++/**
++ * True when Pi would load the worktree's project-local files by its own rules:
++ * the source checkout's nearest saved trust decision is `true`. Never approves
++ * a plain checkout (source path equals cwd) and never approves without trust
++ * data. Read-only: callers must never write the trust store.
++ */
++export function shouldApprovePiProject(input: PiApproveDecisionInput): boolean {
++  if (!input.trust || !input.sourceCheckoutPath) {
++    return false;
++  }
++  if (input.sourceCheckoutPath === input.cwd) {
++    return false;
++  }
++  return findNearestPiTrustDecision(input.trust, input.sourceCheckoutPath) === true;
++}
++
++/** Pi's default agent trust store location. */
++export function defaultPiTrustPath(): string {
++  return join(homedir(), ".pi", "agent", "trust.json");
++}
++
++/** Read-only read of Pi's trust store. Returns undefined when missing, unreadable, or malformed. */
++export async function readPiTrustFile(
++  path: string = defaultPiTrustPath(),
++): Promise<PiTrustData | undefined> {
++  let raw: string;
++  try {
++    raw = await readFile(path, "utf8");
++  } catch {
++    return undefined;
++  }
++  try {
++    const parsed: unknown = JSON.parse(raw);
++    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
++      return undefined;
++    }
++    const data: PiTrustData = {};
++    for (const [key, value] of Object.entries(parsed)) {
++      if (value === true || value === false || value === null) {
++        data[key] = value;
++      }
++    }
++    return data;
++  } catch {
++    return undefined;
++  }
++}
++
++/**
++ * Source checkout for a Paseo-managed worktree cwd, via
++ * `git rev-parse --path-format=absolute --git-common-dir`. Returns null when
++ * cwd is outside $PASEO_HOME/worktrees, is a main checkout, or git fails;
++ * callers must treat null as "no approval".
++ */
++export async function resolveManagedWorktreeSource(cwd: string): Promise<string | null> {
++  const canonicalCwd = canonicalDir(cwd);
++  const worktreeRoot = canonicalDir(join(resolvePaseoHome(), "worktrees"));
++  if (canonicalCwd === worktreeRoot || !canonicalCwd.startsWith(worktreeRoot + sep)) {
++    return null;
++  }
++  try {
++    const { stdout } = await execFileAsync("git", [
++      "-C",
++      canonicalCwd,
++      "rev-parse",
++      "--path-format=absolute",
++      "--git-common-dir",
++    ]);
++    const commonDir = stdout.trim();
++    if (!commonDir || commonDir === join(canonicalCwd, ".git")) {
++      return null;
++    }
++    return dirname(commonDir);
++  } catch {
++    return null;
++  }
++}

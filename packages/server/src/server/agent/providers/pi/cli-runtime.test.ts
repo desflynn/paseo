@@ -5,6 +5,7 @@ import pino from "pino";
 import { describe, expect, test, vi } from "vitest";
 
 import { PiCliRuntime } from "./cli-runtime.js";
+import { shouldApprovePiProject, type PiTrustData } from "./pi-project-trust.js";
 import type { PiRuntimeLaunch } from "./runtime.js";
 
 type PiChild = ChildProcessWithoutNullStreams & {
@@ -34,13 +35,22 @@ function createPiChild(): PiChild {
 function createRuntime(
   child: PiChild,
   launches: PiRuntimeLaunch[] = [],
-  options?: { commandsRpcName?: string; requestTimeoutMs?: number },
+  options?: {
+    commandsRpcName?: string;
+    requestTimeoutMs?: number;
+    resolveWorktreeSource?: (cwd: string) => Promise<string | null>;
+    readProjectTrust?: () => Promise<PiTrustData | undefined>;
+  },
 ): PiCliRuntime {
   return new PiCliRuntime({
     logger: pino({ level: "silent" }),
     command: ["pi"],
     commandsRpcName: options?.commandsRpcName,
     requestTimeoutMs: options?.requestTimeoutMs,
+    ...(options?.resolveWorktreeSource
+      ? { resolveWorktreeSource: options.resolveWorktreeSource }
+      : {}),
+    ...(options?.readProjectTrust ? { readProjectTrust: options.readProjectTrust } : {}),
     spawnProcess: (launch) => {
       launches.push(launch);
       return child;
@@ -535,5 +545,148 @@ describe("PiCliRuntime", () => {
     exitOnCommand(child, "abort");
 
     await expect(session.abort()).resolves.toBeUndefined();
+  });
+});
+
+describe("PiCliRuntime project trust approval", () => {
+  const worktreeCwd = "/paseo/worktrees/22hfpub1/child";
+  const sourceCheckout = "/repo/main";
+
+  test("passes --approve when the managed worktree's source checkout is trusted", async () => {
+    const child = createPiChild();
+    replyToCommands(child, () => ({}));
+    const launches: PiRuntimeLaunch[] = [];
+    const runtime = createRuntime(child, launches, {
+      resolveWorktreeSource: async () => sourceCheckout,
+      readProjectTrust: async () => ({ [sourceCheckout]: true }),
+    });
+
+    await runtime.startSession({ cwd: worktreeCwd });
+
+    expect(launches[0]?.argv).toContain("--approve");
+  });
+
+  test("omits --approve when the source checkout is not trusted", async () => {
+    const child = createPiChild();
+    replyToCommands(child, () => ({}));
+    const launches: PiRuntimeLaunch[] = [];
+    const runtime = createRuntime(child, launches, {
+      resolveWorktreeSource: async () => sourceCheckout,
+      readProjectTrust: async () => ({ [sourceCheckout]: false }),
+    });
+
+    await runtime.startSession({ cwd: worktreeCwd });
+
+    expect(launches[0]?.argv).not.toContain("--approve");
+  });
+
+  test("omits --approve for an ordinary trusted checkout that is not a managed worktree", async () => {
+    const child = createPiChild();
+    replyToCommands(child, () => ({}));
+    const launches: PiRuntimeLaunch[] = [];
+    const runtime = createRuntime(child, launches, {
+      resolveWorktreeSource: async () => null,
+      readProjectTrust: async () => ({ [worktreeCwd]: true }),
+    });
+
+    await runtime.startSession({ cwd: worktreeCwd });
+
+    expect(launches[0]?.argv).not.toContain("--approve");
+  });
+
+  test("omits --approve and still starts when the trust data is unreadable", async () => {
+    const child = createPiChild();
+    replyToCommands(child, () => ({}));
+    const launches: PiRuntimeLaunch[] = [];
+    const runtime = createRuntime(child, launches, {
+      resolveWorktreeSource: async () => sourceCheckout,
+      readProjectTrust: async () => {
+        throw new Error("EACCES: unreadable trust.json");
+      },
+    });
+
+    await runtime.startSession({ cwd: worktreeCwd });
+
+    expect(launches[0]?.argv).not.toContain("--approve");
+    expect(launches).toHaveLength(1);
+  });
+});
+
+describe("shouldApprovePiProject", () => {
+  test("approves when the source checkout itself is trusted", () => {
+    expect(
+      shouldApprovePiProject({
+        cwd: "/paseo/worktrees/22hfpub1/child",
+        sourceCheckoutPath: "/repo/main",
+        trust: { "/repo/main": true },
+      }),
+    ).toBe(true);
+  });
+
+  test("approves via nearest-ancestor trust of the source checkout", () => {
+    expect(
+      shouldApprovePiProject({
+        cwd: "/paseo/worktrees/22hfpub1/child",
+        sourceCheckoutPath: "/repo/main",
+        trust: { "/repo": true },
+      }),
+    ).toBe(true);
+  });
+
+  test("nearest decision wins over an ancestor", () => {
+    expect(
+      shouldApprovePiProject({
+        cwd: "/paseo/worktrees/22hfpub1/child",
+        sourceCheckoutPath: "/repo/main",
+        trust: { "/repo": false, "/repo/main": true },
+      }),
+    ).toBe(true);
+    expect(
+      shouldApprovePiProject({
+        cwd: "/paseo/worktrees/22hfpub1/child",
+        sourceCheckoutPath: "/repo/main",
+        trust: { "/repo": true, "/repo/main": false },
+      }),
+    ).toBe(false);
+  });
+
+  test("null entries are skipped like absent decisions", () => {
+    expect(
+      shouldApprovePiProject({
+        cwd: "/paseo/worktrees/22hfpub1/child",
+        sourceCheckoutPath: "/repo/main",
+        trust: { "/repo": null, "/": true },
+      }),
+    ).toBe(true);
+  });
+
+  test("never approves a plain checkout whose source path equals the cwd", () => {
+    expect(
+      shouldApprovePiProject({
+        cwd: "/repo/main",
+        sourceCheckoutPath: "/repo/main",
+        trust: { "/repo/main": true },
+      }),
+    ).toBe(false);
+  });
+
+  test("never approves without trust data", () => {
+    expect(
+      shouldApprovePiProject({
+        cwd: "/paseo/worktrees/22hfpub1/child",
+        sourceCheckoutPath: "/repo/main",
+        trust: undefined,
+      }),
+    ).toBe(false);
+  });
+
+  test("matches canonically normalised source paths", () => {
+    expect(
+      shouldApprovePiProject({
+        cwd: "/paseo/worktrees/22hfpub1/child",
+        sourceCheckoutPath: "/repo/main/",
+        trust: { "/repo/main": true },
+      }),
+    ).toBe(true);
   });
 });

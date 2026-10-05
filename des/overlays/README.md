@@ -124,3 +124,17 @@ only), `agent/tools/paseo-tools.ts` (`create_agent`) and `schedule/service.ts`. 
 passes the label service into the last two. The `SUB` catalog entry is created in the app.
 
 Last verified: written against `0.10.3-df` at 2419f0e5b (2026-10-05).
+
+## 6. Wait through an agent reload
+
+- Patch: `reload-wait.patch`. Worklog: `RELOAD-WAIT-WORKLOG.md`.
+- `wait_for_finish` awaits `agentManager.waitForAgentReload(id)` when the agent is off the live
+  map, then waits normally. A reload no longer carries the "... process is closed" error its own
+  close caused into the restored agent.
+
+## 7. Pi trust for managed worktrees
+
+- Patch: `pi-worktree-trust.patch`. Worklog: `PI-TRUST-WORKLOG.md`.
+- The Pi provider adds `--approve` only when the cwd is a git worktree under
+  `$PASEO_HOME/worktrees` and Pi already trusts its source checkout (`~/.pi/agent/trust.json`,
+  nearest decision wins, as in Pi's `trust-manager.js`). The file is only read.
