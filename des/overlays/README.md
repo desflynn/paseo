@@ -147,3 +147,14 @@ Last verified: written against `0.10.3-df` at 2419f0e5b (2026-10-05).
   `... aborted at X / Y tokens`. The figures are the latest usage the poller published; without
   usage the line has no "at ..." part. The protocol status stays `loading | completed`, so old
   apps keep working.
+
+## 9. Claude subagent rows that never finish
+
+- Patch: `claude-stale-subagent.patch`. Worklog: `CLAUDE-STALE-SUBAGENT-WORKLOG.md`.
+- One "running" provider subagent row pins its whole workspace "running" (`workspace-directory.ts`),
+  so a row nothing closes keeps the sidebar spinner and the "N working" pill on forever.
+- In `providers/claude/`: an interrupt reports open legacy sidechain rows as `canceled` instead of
+  dropping them; a successful result marks task-protocol foreground rows still `running` as
+  `completed` (`completeRunningForegroundTasks`, backgrounded rows untouched); legacy rows are made
+  only under subagent tools (`isClaudeSubagentToolName`), so MCP tool calls no longer show as
+  nameless "Claude subagent" rows.
