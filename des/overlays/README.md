@@ -104,3 +104,23 @@ What it must achieve: in `packages/server/src/server/agent/providers/pi/agent.ts
 delivers nothing. A failed compaction still releases the prompt.
 
 Last verified: applies cleanly to `v0.10.3` (2026-10-04).
+
+## 5. SUB label for agent-created workspaces
+
+When agent traffic creates an agent that is alone in its workspace, the daemon puts the workspace
+label `SUB` on that workspace. Agent traffic means CLI and DCI sessions (`cli`), in-daemon MCP
+`create_agent`, and schedules. App-created agents never get SUB. A workspace that already holds
+another agent, such as the parent's, never gets SUB. The daemon never removes it. DCI's launch
+tool may also set SUB; a second assignment does nothing.
+
+- Patch: `sub-label.patch` (server only)
+- Worklog: `SUB-WORKLOG.md`
+- Upstream: not filed.
+
+What it must achieve: one helper, `workspace-labels/sub-label.ts` `maybeApplySubLabel()`, checks
+that no other listed agent shares the workspace, then calls `setAssignment` with `SUB` without
+waiting, and logs a warning on failure. Call it after a create in `session.ts` (non-owner sessions
+only), `agent/tools/paseo-tools.ts` (`create_agent`) and `schedule/service.ts`. `bootstrap.ts`
+passes the label service into the last two. The `SUB` catalog entry is created in the app.
+
+Last verified: written against `0.10.3-df` at 2419f0e5b (2026-10-05).

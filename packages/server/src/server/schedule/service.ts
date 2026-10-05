@@ -28,6 +28,8 @@ import type {
   UpdateScheduleNewAgentConfig,
 } from "@getpaseo/protocol/schedule/types";
 import type { FirstAgentContext } from "@getpaseo/protocol/messages";
+import type { WorkspaceLabelService } from "../workspace-labels/index.js";
+import { maybeApplySubLabel } from "../workspace-labels/sub-label.js";
 
 const SCHEDULE_TICK_INTERVAL_MS = 1000;
 
@@ -214,6 +216,7 @@ type ScheduleAgentManager = Pick<
     | "createAgent"
     | "getRegisteredProviderIds"
     | "hydrateTimelineFromProvider"
+    | "listAgents"
     | "resumeAgentFromPersistence"
     | "runAgent"
     | "waitForAgentEvent"
@@ -238,6 +241,7 @@ export interface ScheduleServiceOptions {
     input: ScheduleWorkspaceCreateInput,
   ) => Promise<CreatePaseoWorktreeWorkflowResult>;
   archiveWorkspace: (workspaceId: string) => Promise<void>;
+  workspaceLabelService?: Pick<WorkspaceLabelService, "setAssignment"> | null;
   now?: () => Date;
   runner?: (schedule: StoredSchedule, runId: string) => Promise<ScheduleExecutionResult>;
 }
@@ -255,6 +259,7 @@ export class ScheduleService {
     input: ScheduleWorkspaceCreateInput,
   ) => Promise<CreatePaseoWorktreeWorkflowResult>;
   private readonly archiveWorkspace: (workspaceId: string) => Promise<void>;
+  private readonly workspaceLabelService?: Pick<WorkspaceLabelService, "setAssignment"> | null;
   private readonly now: () => Date;
   private readonly runner: (
     schedule: StoredSchedule,
@@ -272,6 +277,7 @@ export class ScheduleService {
     this.createDirectoryWorkspace = options.createDirectoryWorkspace;
     this.createPaseoWorktreeWorkspace = options.createPaseoWorktreeWorkspace;
     this.archiveWorkspace = options.archiveWorkspace;
+    this.workspaceLabelService = options.workspaceLabelService;
     this.now = options.now ?? (() => new Date());
     this.runner = options.runner ?? ((schedule, runId) => this.executeSchedule(schedule, runId));
   }
@@ -915,6 +921,14 @@ export class ScheduleService {
       });
       const agent = created.snapshot;
       agentId = agent.id;
+      // SUB overlay (des/overlays): agent-created agents alone in their workspace get the SUB workspace label.
+      maybeApplySubLabel({
+        agentId,
+        workspaceId: workspace.workspaceId,
+        agentManager: this.agentManager,
+        workspaceLabelService: this.workspaceLabelService,
+        logger: this.logger,
+      });
       await this.recordRunWorkspace({
         scheduleId: schedule.id,
         runId,

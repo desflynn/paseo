@@ -93,6 +93,7 @@ import {
   WorkspaceLabelStorageUncertainError,
   type WorkspaceLabelService,
 } from "./workspace-labels/index.js";
+import { maybeApplySubLabel } from "./workspace-labels/sub-label.js";
 
 import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
 import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
@@ -3995,6 +3996,10 @@ export class Session {
         progress ? (snapshot) => progress.emit(this.creationUpdate(snapshot)) : undefined,
       );
       this.applyOwnerMineLabel(creation.agent?.workspaceId ?? creation.workspaceId);
+      this.applySubLabelForAgentTraffic(
+        creation.agent?.id,
+        creation.agent?.workspaceId ?? creation.workspaceId,
+      );
       this.emitForSource(
         {
           type: "agent.create.response",
@@ -4160,6 +4165,7 @@ export class Session {
         agent = await this.createSessionAgent(msg);
       }
       this.applyOwnerMineLabel(agent.workspaceId);
+      this.applySubLabelForAgentTraffic(agent.id, agent.workspaceId);
       this.emit({
         type: "status",
         payload: {
@@ -6368,6 +6374,21 @@ export class Session {
           "Failed to assign MINE workspace label",
         );
       });
+  }
+
+  // SUB overlay (des/overlays): agent-created agents alone in their workspace get the SUB workspace label.
+  private applySubLabelForAgentTraffic(
+    agentId: string | null | undefined,
+    workspaceId: string | null | undefined,
+  ): void {
+    if (this.clientType === "mobile" || this.clientType === "browser") return;
+    maybeApplySubLabel({
+      agentId,
+      workspaceId,
+      agentManager: this.agentManager,
+      workspaceLabelService: this.workspaceLabelService,
+      logger: this.sessionLogger,
+    });
   }
 
   private requireWorkspaceLabels(): WorkspaceLabelService {

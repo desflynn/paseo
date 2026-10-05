@@ -5998,3 +5998,145 @@ describe("owner MINE workspace label overlay", () => {
     }
   });
 });
+
+describe("agent-created SUB workspace label overlay", () => {
+  const SUB_LABEL = { name: "SUB", color: "sky" as const };
+
+  function createLabelRecordingService(): {
+    setAssignment: ReturnType<typeof vi.fn>;
+    service: WorkspaceLabelService;
+  } {
+    const setAssignment = vi.fn(
+      async (input: {
+        workspaceId: string;
+        label: { name: string; color: string };
+        assigned: boolean;
+      }) => ({
+        label: input.label,
+        workspaceLabels: input.assigned ? [input.label.name] : [],
+      }),
+    );
+    return { setAssignment, service: { setAssignment } as unknown as WorkspaceLabelService };
+  }
+
+  function creationServiceReturning(agent: { id: string; workspaceId: string } | null) {
+    return {
+      create: vi.fn(async () => ({
+        kind: "agent",
+        idempotencyKey: "request-create",
+        revision: 0,
+        phase: "completed",
+        workspaceId: agent?.workspaceId ?? "ws-1",
+        agentId: agent?.id ?? null,
+        agent: agent ?? null,
+        error: null,
+      })),
+      subscribe: vi.fn(),
+    } as unknown as SessionOptions["creationService"];
+  }
+
+  function sendCreateRequest(requestId: string) {
+    return {
+      type: "agent.create.request" as const,
+      requestId,
+      config: { provider: "codex", cwd: "/tmp/repo" },
+    } as unknown as SessionInboundMessage;
+  }
+
+  test("a cli session creating an agent alone in its workspace labels the workspace SUB", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({
+      clientType: "cli",
+      messages,
+      workspaceLabelService: service,
+      creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
+    });
+
+    await session.handleMessage(sendCreateRequest("request-sub-create"));
+
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      label: SUB_LABEL,
+      assigned: true,
+    });
+    expect(messages.some((message) => message.type === "agent.create.response")).toBe(true);
+  });
+
+  test("a cli session creating an agent into an occupied workspace does not label SUB", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const session = createSessionForTest({
+      clientType: "cli",
+      workspaceLabelService: service,
+      creationService: creationServiceReturning({ id: "agent-2", workspaceId: "ws-1" }),
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: "agent-1", workspaceId: "ws-1", internal: false }]),
+      },
+    });
+
+    await session.handleMessage(sendCreateRequest("request-sub-occupied"));
+
+    expect(setAssignment).not.toHaveBeenCalled();
+  });
+
+  test("a mobile session creating an agent alone gets MINE only, never SUB", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const session = createSessionForTest({
+      clientType: "mobile",
+      workspaceLabelService: service,
+      creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
+    });
+
+    await session.handleMessage(sendCreateRequest("request-mobile-sub"));
+
+    expect(setAssignment).toHaveBeenCalledTimes(1);
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      label: { name: "MINE", color: "indigo" },
+      assigned: true,
+    });
+  });
+
+  test("labeling an already-SUB workspace keeps exactly one SUB", async () => {
+    const paseoHome = mkdtempSync(join(tmpdir(), "paseo-sub-"));
+    try {
+      const registry = new FileBackedWorkspaceRegistry(
+        join(paseoHome, "projects", "workspaces.json"),
+        pino({ level: "silent" }),
+      );
+      await registry.upsert(
+        createPersistedWorkspaceRecord({
+          workspaceId: "ws-1",
+          projectId: "prj-1",
+          cwd: "/repo",
+          kind: "local_checkout",
+          displayName: "main",
+          createdAt: "2026-10-04T00:00:00.000Z",
+          updatedAt: "2026-10-04T00:00:00.000Z",
+        }),
+      );
+      const labelService = createWorkspaceLabelService({
+        paseoHome,
+        workspaceRegistry: registry,
+      });
+      await labelService.setAssignment({ workspaceId: "ws-1", label: SUB_LABEL, assigned: true });
+      const setAssignment = vi.spyOn(labelService, "setAssignment");
+      const session = createSessionForTest({
+        clientType: "cli",
+        workspaceLabelService: labelService,
+        creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
+      });
+
+      await session.handleMessage(sendCreateRequest("request-sub-repeat"));
+
+      expect(setAssignment).toHaveBeenCalledWith({
+        workspaceId: "ws-1",
+        label: SUB_LABEL,
+        assigned: true,
+      });
+      expect((await registry.get("ws-1"))?.labels).toEqual(["SUB"]);
+    } finally {
+      rmSync(paseoHome, { recursive: true, force: true });
+    }
+  });
+});
