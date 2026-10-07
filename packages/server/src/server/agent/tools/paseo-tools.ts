@@ -33,6 +33,8 @@ import {
   type ArchiveDependencies,
 } from "../../workspace-archive-service.js";
 import { createAgentCommand, type CreateAgentFromMcpInput } from "../create-agent/create.js";
+import type { WorkspaceLabelService } from "../../workspace-labels/index.js";
+import { maybeApplySubLabel } from "../../workspace-labels/sub-label.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "../../voice-types.js";
 import type { FirstAgentContext } from "../../messages.js";
 import { everyMsToFiveFieldCron } from "@getpaseo/protocol/schedule/cadence";
@@ -106,6 +108,7 @@ export interface PaseoToolHostDependencies {
   terminalManager?: TerminalManager | null;
   getDaemonTcpPort?: () => number | null;
   scheduleService?: ScheduleService | null;
+  workspaceLabelService?: Pick<WorkspaceLabelService, "setAssignment"> | null;
   providerSnapshotManager: ProviderSnapshotManager;
   daemonConfigStore?: Pick<DaemonConfigStore, "get">;
   github?: ForgeService;
@@ -1499,6 +1502,15 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           worktree,
         },
       );
+
+      // SUB overlay (des/overlays): agent-created agents alone in their workspace get the SUB workspace label.
+      maybeApplySubLabel({
+        agentId: snapshot.id,
+        workspaceId: snapshot.workspaceId,
+        agentManager,
+        workspaceLabelService: options.workspaceLabelService,
+        logger: childLogger,
+      });
 
       try {
         if (!createdInBackground && initialPromptStarted) {

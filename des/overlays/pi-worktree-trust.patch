@@ -1,5 +1,5 @@
 diff --git a/packages/server/src/server/agent/providers/pi/cli-runtime.test.ts b/packages/server/src/server/agent/providers/pi/cli-runtime.test.ts
-index c178bb540..764398f29 100644
+index 463870760..06585e148 100644
 --- a/packages/server/src/server/agent/providers/pi/cli-runtime.test.ts
 +++ b/packages/server/src/server/agent/providers/pi/cli-runtime.test.ts
 @@ -5,6 +5,7 @@ import pino from "pino";
@@ -34,7 +34,7 @@ index c178bb540..764398f29 100644
      spawnProcess: (launch) => {
        launches.push(launch);
        return child;
-@@ -537,3 +547,146 @@ describe("PiCliRuntime", () => {
+@@ -545,3 +555,146 @@ describe("PiCliRuntime", () => {
      await expect(session.abort()).resolves.toBeUndefined();
    });
  });
@@ -182,10 +182,10 @@ index c178bb540..764398f29 100644
 +  });
 +});
 diff --git a/packages/server/src/server/agent/providers/pi/cli-runtime.ts b/packages/server/src/server/agent/providers/pi/cli-runtime.ts
-index 0262ac13a..ccde85aa5 100644
+index 62ee01c50..13338da45 100644
 --- a/packages/server/src/server/agent/providers/pi/cli-runtime.ts
 +++ b/packages/server/src/server/agent/providers/pi/cli-runtime.ts
-@@ -24,6 +24,12 @@ import type {
+@@ -25,6 +25,12 @@ import type {
    PiSessionState,
    PiSessionStats,
  } from "./rpc-types.js";
@@ -198,7 +198,7 @@ index 0262ac13a..ccde85aa5 100644
  
  const DEFAULT_PI_COMMAND: [string, ...string[]] = [
    process.env.PI_COMMAND ?? process.env.PI_ACP_PI_COMMAND ?? "pi",
-@@ -37,24 +43,36 @@ export interface PiCliRuntimeOptions {
+@@ -38,24 +44,36 @@ export interface PiCliRuntimeOptions {
    commandsRpcName?: string;
    requestTimeoutMs?: number;
    spawnProcess?: (launch: PiRuntimeLaunch) => ChildProcessWithoutNullStreams;
@@ -234,11 +234,11 @@ index 0262ac13a..ccde85aa5 100644
 -      session: input,
 +      session: extraArgs.length > 0 ? { ...input, extraArgs } : input,
      });
+     launch.env = createExternalProcessEnv(globalThis.process.env, launch.env ?? {});
      const [command, ...args] = launch.argv;
-     const processLaunch: JsonlRpcLaunch = {
-@@ -78,6 +96,35 @@ export class PiCliRuntime implements PiRuntime {
+@@ -80,6 +98,35 @@ export class PiCliRuntime implements PiRuntime {
      }
-     return new PiCliRuntimeSession(process, this.commandsRpcName);
+     return new PiCliRuntimeSession(process, this.commandsRpcName, launch.env);
    }
 +
 +  /**

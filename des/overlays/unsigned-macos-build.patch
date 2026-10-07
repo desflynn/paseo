@@ -1,8 +1,8 @@
 diff --git a/package.json b/package.json
-index 595b0b6d9..c918da924 100644
+index 2805417f6..4db405028 100644
 --- a/package.json
 +++ b/package.json
-@@ -147,5 +147,20 @@
+@@ -148,5 +148,20 @@
      "react-dom": "19.1.0",
      "react-native-reanimated": "4.3.1",
      "react-native-worklets": "0.8.3"
@@ -24,10 +24,10 @@ index 595b0b6d9..c918da924 100644
    }
  }
 diff --git a/packages/desktop/electron-builder.yml b/packages/desktop/electron-builder.yml
-index fb01c7b19..81d42d9a4 100644
+index 6ab5a9b69..8816bc3b0 100644
 --- a/packages/desktop/electron-builder.yml
 +++ b/packages/desktop/electron-builder.yml
-@@ -40,10 +40,9 @@ mac:
+@@ -44,10 +44,9 @@ mac:
    minimumSystemVersion: "13.0.0"
    category: public.app-category.developer-tools
    icon: assets/icon.icns

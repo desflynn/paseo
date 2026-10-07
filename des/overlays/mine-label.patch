@@ -1,5 +1,5 @@
 diff --git a/packages/server/src/server/session.test.ts b/packages/server/src/server/session.test.ts
-index ab43c023c..1a2ed1854 100644
+index e60dd9520..ba821fbbd 100644
 --- a/packages/server/src/server/session.test.ts
 +++ b/packages/server/src/server/session.test.ts
 @@ -26,11 +26,20 @@ import { Session } from "./session.js";
@@ -63,7 +63,7 @@ index ab43c023c..1a2ed1854 100644
      onMessage: (message) => messages.push(message),
      ...(options.targetedMessages
        ? {
-@@ -5810,3 +5831,170 @@ test("provider snapshots preserve versionless visibility while capabilities upda
+@@ -5812,3 +5833,170 @@ test("provider snapshots preserve versionless visibility while capabilities upda
    ]);
    expect(references.compactSnapshot!.entries[0]!.modes![0]!.icon).toBe("ShieldCheck");
  });
@@ -235,10 +235,10 @@ index ab43c023c..1a2ed1854 100644
 +  });
 +});
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index c69033ab3..8243e5100 100644
+index d57333da0..454d00ff7 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -436,6 +436,7 @@ type AgentMcpTransportFactory = () => Promise<unknown>;
+@@ -441,6 +441,7 @@ type AgentMcpTransportFactory = () => Promise<unknown>;
  export interface SessionOptions {
    browserToolsBroker?: BrowserToolsBroker | null;
    clientId: string;
@@ -246,7 +246,7 @@ index c69033ab3..8243e5100 100644
    permissions: readonly DaemonPermission[];
    appVersion?: string | null;
    clientCapabilities?: Record<string, unknown> | null;
-@@ -687,6 +688,7 @@ export class Session {
+@@ -697,6 +698,7 @@ export class Session {
    );
    private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
    private readonly clientId: string;
@@ -254,7 +254,7 @@ index c69033ab3..8243e5100 100644
    private readonly authorization: SessionAuthorization;
    private appVersion: string | null;
    private clientCapabilities: ReadonlySet<ClientCapability>;
-@@ -847,6 +849,7 @@ export class Session {
+@@ -858,6 +860,7 @@ export class Session {
      } = options;
      this.browserToolsBroker = options.browserToolsBroker;
      this.clientId = clientId;
@@ -262,7 +262,7 @@ index c69033ab3..8243e5100 100644
      this.authorization = new SessionAuthorization(permissions);
      this.appVersion = appVersion ?? null;
      this.clientCapabilities = parseClientCapabilities(clientCapabilities);
-@@ -3991,6 +3994,7 @@ export class Session {
+@@ -4011,6 +4014,7 @@ export class Session {
          request,
          progress ? (snapshot) => progress.emit(this.creationUpdate(snapshot)) : undefined,
        );
@@ -270,7 +270,7 @@ index c69033ab3..8243e5100 100644
        this.emitForSource(
          {
            type: "agent.create.response",
-@@ -4155,6 +4159,7 @@ export class Session {
+@@ -4175,6 +4179,7 @@ export class Session {
        } else {
          agent = await this.createSessionAgent(msg);
        }
@@ -278,7 +278,7 @@ index c69033ab3..8243e5100 100644
        this.emit({
          type: "status",
          payload: {
-@@ -6351,6 +6356,20 @@ export class Session {
+@@ -6373,6 +6378,20 @@ export class Session {
      }
    }
  
@@ -299,7 +299,7 @@ index c69033ab3..8243e5100 100644
    private requireWorkspaceLabels(): WorkspaceLabelService {
      if (!this.workspaceLabelService) {
        throw new SessionRequestError("workspace_labels_unavailable", "Workspace labels unavailable");
-@@ -8094,6 +8113,11 @@ export class Session {
+@@ -8115,6 +8134,11 @@ export class Session {
          await send();
        }
  
@@ -312,7 +312,7 @@ index c69033ab3..8243e5100 100644
          type: "send_agent_message_response",
          payload: {
 diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
-index 7c533ce23..345c503a4 100644
+index 4dcdc680a..723e2d8b3 100644
 --- a/packages/server/src/server/websocket-server.ts
 +++ b/packages/server/src/server/websocket-server.ts
 @@ -459,6 +459,7 @@ type SessionConnection = ReconnectableSessionConnection | PluginSessionConnectio
@@ -323,7 +323,7 @@ index 7c533ce23..345c503a4 100644
    appVersion: string | null;
    clientCapabilities: Record<string, unknown> | null;
    permissions: readonly DaemonPermission[];
-@@ -1368,18 +1369,28 @@ export class VoiceAssistantWebSocketServer {
+@@ -1369,18 +1370,28 @@ export class VoiceAssistantWebSocketServer {
    private createSessionConnection(params: {
      ws: WebSocketLike;
      clientId: string;
@@ -354,7 +354,7 @@ index 7c533ce23..345c503a4 100644
        appVersion,
        clientCapabilities,
        permissions: admission.permissions,
-@@ -1454,6 +1465,7 @@ export class VoiceAssistantWebSocketServer {
+@@ -1455,6 +1466,7 @@ export class VoiceAssistantWebSocketServer {
      return new Session({
        browserToolsBroker: this.browserToolsBroker,
        clientId: options.clientId,
@@ -362,7 +362,7 @@ index 7c533ce23..345c503a4 100644
        appVersion: options.appVersion,
        clientCapabilities: options.clientCapabilities,
        permissions: options.permissions,
-@@ -1623,6 +1635,7 @@ export class VoiceAssistantWebSocketServer {
+@@ -1624,6 +1636,7 @@ export class VoiceAssistantWebSocketServer {
      const connection = this.createSessionConnection({
        ws,
        clientId,

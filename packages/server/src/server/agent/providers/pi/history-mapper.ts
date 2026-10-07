@@ -196,6 +196,7 @@ export class PiHistoryMapper {
             type: "tool_call",
             callId: this.resolveToolCallId(content.id, tracked),
             name: mapping?.name ?? tracked.toolName,
+            ...(mapping?.displayName ? { metadata: { toolDisplayName: mapping.displayName } } : {}),
             status: "running",
             detail,
             error: null,
@@ -229,13 +230,16 @@ export class PiHistoryMapper {
       {
         type: "timeline",
         provider: this.provider,
-        item: toToolResultTimelineItem({
-          callId: this.resolveToolCallId(message.toolCallId, tracked),
-          name: mapping?.name ?? tracked.toolName,
-          isError: Boolean(message.isError),
-          detail,
-          errorText: extractTextFromToolResult(result) ?? "Tool call failed",
-        }),
+        item: {
+          ...toToolResultTimelineItem({
+            callId: this.resolveToolCallId(message.toolCallId, tracked),
+            name: mapping?.name ?? tracked.toolName,
+            isError: Boolean(message.isError),
+            detail,
+            errorText: extractTextFromToolResult(result) ?? "Tool call failed",
+          }),
+          ...(mapping?.displayName ? { metadata: { toolDisplayName: mapping.displayName } } : {}),
+        },
       },
       ...this.extensionEvents(mapping),
     ];

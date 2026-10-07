@@ -8,14 +8,22 @@ Plugins (`des/plugins/`) and upgrade notes (`des/upgrade-*`) are not overlays. T
 
 ## Reapply on a new base
 
+Before switching the existing checkout, commit or classify every project-owned change. Seed the
+new branch with the preserved plugin, overlay and harness assets so daemon-served paths remain
+available. Use the following patch order on `v0.11.0`; overlay 2 is superseded on this base.
+
 ```bash
-git checkout -b X.Y.Z-df vX.Y.Z
-git apply --3way des/overlays/unsigned-macos-build.patch   # always
-git apply --3way des/overlays/acp-context-meter.patch      # only while the base lacks upstream 48329facc
+git apply --3way des/overlays/unsigned-macos-build.patch
 git apply --3way des/overlays/mine-label.patch
 git apply --3way des/overlays/pi-compaction-hold.patch
-npm install                                                # then fix allowScripts, see overlay 1
-npm run build:desktop                                      # from the repo root
+git apply --3way des/overlays/sub-label.patch
+git apply --3way des/overlays/reload-wait.patch
+git apply --3way des/overlays/pi-worktree-trust.patch
+git apply --3way des/overlays/pi-compaction-status.patch
+git apply --3way des/overlays/claude-stale-subagent.patch
+git apply --3way des/overlays/pi-mcp-labels.patch
+npm install                 # approve exact resolved install-script versions, see overlay 1
+npm run build:desktop        # from the repo root; installation is a separate owner action
 ```
 
 Check a patch without touching the working tree:
@@ -40,11 +48,11 @@ What it must achieve:
    `entitlements` and `entitlementsInherit` lines.
 2. `package.json`, root: an `allowScripts` map that approves the install scripts the build needs
    (native modules such as esbuild, fsevents, sharp, node-pty, workerd, msgpackr-extract).
-   The package versions in the patch belong to the 0.9.1 to 0.10.3 dependency tree. **Treat them
+   The package versions in the patch belong to the 0.11.0 dependency tree. **Treat them
    as reference only.** On a new base, run `npm install`, read which install scripts npm blocks,
    and approve those exact versions.
 
-Last verified: applies cleanly to `v0.10.3` and to upstream `main` at `642d69b14` (2026-10-04).
+Last verified: regenerated against `v0.11.0`, with all 13 resolved install-script approvals (2026-10-07).
 
 ## 2. ACP context meter
 
@@ -59,12 +67,10 @@ What it must achieve: in `packages/server/src/server/agent/providers/acp-agent.t
 `handleUsageUpdate` pushes a `usage_updated` event with `contextWindowUsedTokens: update.used`
 and `contextWindowMaxTokens: update.size`.
 
-**Retire this overlay when the base includes upstream `48329facc`** (#4848, "surface
-context-window usage from the ACP usage_update notification"). That fix is on upstream `main`
-but in no release tag as of 2026-10-04. It does the same job with input validation, so our patch no longer applies on top of it.
+**Superseded in `v0.11.0`: do not apply.** The base includes upstream `48329facc` (#4848,
+"surface context-window usage from the ACP usage_update notification"), which also validates the
+inputs. Keep this patch as a historical reference for older bases lacking that commit.
 Check: `git tag --contains 48329facc`.
-
-Last verified: applies cleanly to `v0.10.3`; does not apply to upstream `main` (superseded).
 
 ## 3. MINE label for work the owner started
 
@@ -87,7 +93,7 @@ What it must achieve:
    (`packages/app/src/runtime/host-runtime.ts`); CLI, DCI and plugins send `cli`.
 3. The `MINE` catalog entry is created in the app. If it already exists, the label service keeps its colour.
 
-Last verified: applies cleanly to `v0.10.3` (2026-10-04).
+Last verified: regenerated against `v0.11.0`; owner-label cases 4/4 (2026-10-07).
 
 ## 4. Pi: hold prompts during manual compaction
 
@@ -103,7 +109,7 @@ What it must achieve: in `packages/server/src/server/agent/providers/pi/agent.ts
 `runtimeSession.prompt`, then delivers once. If the turn was interrupted while it waited, it
 delivers nothing. A failed compaction still releases the prompt.
 
-Last verified: applies cleanly to `v0.10.3` (2026-10-04).
+Last verified: carried onto `v0.11.0`; three hold cases pass in the Pi suite (2026-10-07).
 
 ## 5. SUB label for agent-created workspaces
 
@@ -123,7 +129,7 @@ waiting, and logs a warning on failure. Call it after a create in `session.ts` (
 only), `agent/tools/paseo-tools.ts` (`create_agent`) and `schedule/service.ts`. `bootstrap.ts`
 passes the label service into the last two. The `SUB` catalog entry is created in the app.
 
-Last verified: written against `0.10.3-df` at 2419f0e5b (2026-10-05).
+Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedule label slice 9/9 (2026-10-07).
 
 ## 6. Wait through an agent reload
 
@@ -158,3 +164,16 @@ Last verified: written against `0.10.3-df` at 2419f0e5b (2026-10-05).
   `completed` (`completeRunningForegroundTasks`, backgrounded rows untouched); legacy rows are made
   only under subagent tools (`isClaudeSubagentToolName`), so MCP tool calls no longer show as
   nameless "Claude subagent" rows.
+- 0.11 carry preserves upstream #6295's background-helper routing and survival; six new-base
+  RED cases restore to 66/66 GREEN. See `../upgrade-0.11/CLAUDE-CARRY-WORKLOG.md`.
+
+## 10. Pi MCP server and action labels
+
+- Patch: `pi-mcp-labels.patch`; source candidate `cde2d2d75` from preserved `0.10.3-df`.
+- MCP gateway results supply an optional friendly `Server > Action` label without changing the
+  canonical tool identity. Carry it through the extension adapter, live emission and history
+  replay; the shared display helper uses the explicit label before its ordinary name mapping.
+- No wire schema changes. Without this carry the preserved tool-results spike loses its labels.
+- Apply after the Pi hold/status overlays. Parent display/adapter/history suites 39/39; host
+  transformer 8/8; emission regression passes within Pi's 127/127 suite on `v0.11.0`.
+- Evidence: `../upgrade-0.11/PI-CARRY-WORKLOG.md` and `../upgrade-0.11/WORKING-LOG.md`.

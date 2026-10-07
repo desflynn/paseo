@@ -36,10 +36,10 @@ index 07f9f2109..2f8470816 100644
          if (!createdInBackground && initialPromptStarted) {
            const result = await waitForAgentWithTimeout(agentManager, snapshot.id, {
 diff --git a/packages/server/src/server/bootstrap.ts b/packages/server/src/server/bootstrap.ts
-index cfa955eac..97c692a9b 100644
+index 0ec792e87..9864db926 100644
 --- a/packages/server/src/server/bootstrap.ts
 +++ b/packages/server/src/server/bootstrap.ts
-@@ -1344,6 +1344,7 @@ export async function createPaseoDaemon(
+@@ -1360,6 +1360,7 @@ export async function createPaseoDaemon(
      createDirectoryWorkspace: createScheduleLocalWorkspaceExternal,
      createPaseoWorktreeWorkspace: createSchedulePaseoWorktreeExternal,
      archiveWorkspace: archiveScheduleWorkspaceExternal,
@@ -47,7 +47,7 @@ index cfa955eac..97c692a9b 100644
    });
    await scheduleService.start();
    agentManager.setAgentArchivedCallback(async (agentId) => {
-@@ -1373,6 +1374,7 @@ export async function createPaseoDaemon(
+@@ -1389,6 +1390,7 @@ export async function createPaseoDaemon(
      terminalManager,
      getDaemonTcpPort: () => (boundListenTarget?.type === "tcp" ? boundListenTarget.port : null),
      scheduleService,
@@ -56,10 +56,10 @@ index cfa955eac..97c692a9b 100644
      daemonConfigStore,
      github,
 diff --git a/packages/server/src/server/schedule/service.test.ts b/packages/server/src/server/schedule/service.test.ts
-index 612bb7e9a..0570428f2 100644
+index 14e022191..9d3a23cd5 100644
 --- a/packages/server/src/server/schedule/service.test.ts
 +++ b/packages/server/src/server/schedule/service.test.ts
-@@ -938,6 +938,78 @@ describe("ScheduleService", () => {
+@@ -930,6 +930,78 @@ describe("ScheduleService", () => {
      });
    });
  
@@ -199,10 +199,10 @@ index 53d2432f8..01d3a0d1d 100644
          scheduleId: schedule.id,
          runId,
 diff --git a/packages/server/src/server/session.test.ts b/packages/server/src/server/session.test.ts
-index 1a2ed1854..7eddaea7d 100644
+index ba821fbbd..dd25afa34 100644
 --- a/packages/server/src/server/session.test.ts
 +++ b/packages/server/src/server/session.test.ts
-@@ -5998,3 +5998,145 @@ describe("owner MINE workspace label overlay", () => {
+@@ -6000,3 +6000,145 @@ describe("owner MINE workspace label overlay", () => {
      }
    });
  });
@@ -349,10 +349,10 @@ index 1a2ed1854..7eddaea7d 100644
 +  });
 +});
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index 8243e5100..6926ea4e7 100644
+index 454d00ff7..a3464221d 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -93,6 +93,7 @@ import {
+@@ -98,6 +98,7 @@ import {
    WorkspaceLabelStorageUncertainError,
    type WorkspaceLabelService,
  } from "./workspace-labels/index.js";
@@ -360,7 +360,7 @@ index 8243e5100..6926ea4e7 100644
  
  import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
  import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
-@@ -3995,6 +3996,10 @@ export class Session {
+@@ -4015,6 +4016,10 @@ export class Session {
          progress ? (snapshot) => progress.emit(this.creationUpdate(snapshot)) : undefined,
        );
        this.applyOwnerMineLabel(creation.agent?.workspaceId ?? creation.workspaceId);
@@ -371,7 +371,7 @@ index 8243e5100..6926ea4e7 100644
        this.emitForSource(
          {
            type: "agent.create.response",
-@@ -4160,6 +4165,7 @@ export class Session {
+@@ -4180,6 +4185,7 @@ export class Session {
          agent = await this.createSessionAgent(msg);
        }
        this.applyOwnerMineLabel(agent.workspaceId);
@@ -379,7 +379,7 @@ index 8243e5100..6926ea4e7 100644
        this.emit({
          type: "status",
          payload: {
-@@ -6370,6 +6376,21 @@ export class Session {
+@@ -6392,6 +6398,21 @@ export class Session {
        });
    }
  

@@ -2582,6 +2582,132 @@ test("failed reload retains the closed agent for a later resume", async () => {
   }
 });
 
+test("waitForAgentReload resolves only after an in-flight reload settles", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-wait-reload-accessor-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new HeldReloadCloseClient();
+  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  try {
+    const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    const reloading = manager.reloadAgentSession(created.id);
+    await client.waitForCloseToStart();
+
+    let waited = false;
+    const waiting = manager.waitForAgentReload(created.id).then(() => {
+      waited = true;
+      return true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(waited).toBe(false);
+
+    client.finishClosing();
+    await Promise.all([reloading, waiting]);
+    expect(waited).toBe(true);
+    await manager.closeAgent(created.id);
+  } finally {
+    client.finishClosing();
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("reload does not carry a process-closed error its own close caused into the restored agent", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-reload-close-error-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  let capturedSession: TestAgentSession | null = null;
+
+  class LiveEventClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      capturedSession = new TestAgentSession(config);
+      return capturedSession;
+    }
+  }
+
+  const manager = new AgentManager({
+    clients: { codex: new LiveEventClient() },
+    registry: storage,
+    logger,
+  });
+  try {
+    const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    capturedSession!.pushEvent({
+      type: "turn_failed",
+      provider: "codex",
+      turnId: "reload-victim-turn",
+      error: "Pi RPC process is closed",
+    });
+    await vi.waitFor(() => {
+      const failed = manager.getAgent(created.id);
+      expect(failed?.lastError).toBe("Pi RPC process is closed");
+      expect(failed?.attention).toMatchObject({
+        requiresAttention: true,
+        attentionReason: "error",
+      });
+    });
+
+    const reloaded = await manager.reloadAgentSession(created.id);
+    expect(reloaded.lastError).toBeUndefined();
+    expect(reloaded.attention).toEqual({ requiresAttention: false });
+    await manager.closeAgent(created.id);
+  } finally {
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("reload still preserves a genuine pre-reload error", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-reload-keep-error-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  let capturedSession: TestAgentSession | null = null;
+
+  class LiveEventClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      capturedSession = new TestAgentSession(config);
+      return capturedSession;
+    }
+  }
+
+  const manager = new AgentManager({
+    clients: { codex: new LiveEventClient() },
+    registry: storage,
+    logger,
+  });
+  try {
+    const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    capturedSession!.pushEvent({
+      type: "turn_failed",
+      provider: "codex",
+      turnId: "genuine-failure-turn",
+      error: "disk full on provider host",
+    });
+    await vi.waitFor(() => {
+      const failed = manager.getAgent(created.id);
+      expect(failed?.lastError).toBe("disk full on provider host");
+      expect(failed?.attention).toMatchObject({
+        requiresAttention: true,
+        attentionReason: "error",
+      });
+    });
+
+    const reloaded = await manager.reloadAgentSession(created.id);
+    expect(reloaded.lastError).toBe("disk full on provider host");
+    expect(reloaded.attention).toMatchObject({
+      requiresAttention: true,
+      attentionReason: "error",
+    });
+    await manager.closeAgent(created.id);
+  } finally {
+    await storage.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test.each(["hang", "reject"])(
   "reload does not resume when the previous session close fails: %s",
   async (failure) => {

@@ -930,6 +930,78 @@ describe("ScheduleService", () => {
     });
   });
 
+  test("a schedule-created agent alone in its run workspace gets the SUB label", async () => {
+    const setAssignment = vi.fn(
+      async (input: {
+        workspaceId: string;
+        label: { name: string; color: string };
+        assigned: boolean;
+      }) => ({ label: input.label, workspaceLabels: [input.label.name] }),
+    );
+    const createdInputs: Parameters<ScheduleServiceOptions["createAgent"]>[0][] = [];
+    const manager = new AgentManager({
+      logger: createTestLogger(),
+      clients: createTestAgentClients(),
+      registry: agentStorage,
+    });
+    manager.runAgent = async () => ({
+      sessionId: "scheduled-sub-run",
+      finalText: "done",
+      timeline: [{ type: "assistant_message", text: "done" }],
+    });
+    manager.waitForAgentEvent = async () => ({
+      status: "idle",
+      permission: null,
+      lastMessage: "done",
+    });
+    const service = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: manager,
+      agentStorage,
+      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+      workspaceLabelService: { setAssignment } as never,
+      createAgent: async (input) => {
+        createdInputs.push(input);
+        const snapshot = {
+          id: "00000000-0000-0000-0000-000000000423",
+          provider: "claude",
+          cwd: input.cwd ?? tempDir,
+          workspaceId: input.workspaceId,
+          status: "idle",
+          lifecycle: "idle",
+        };
+        return {
+          snapshot: snapshot as Awaited<
+            ReturnType<ScheduleServiceOptions["createAgent"]>
+          >["snapshot"],
+          liveSnapshot: snapshot as Awaited<
+            ReturnType<ScheduleServiceOptions["createAgent"]>
+          >["liveSnapshot"],
+          background: true,
+          initialPromptStarted: false,
+          initialPromptError: null,
+        };
+      },
+      now: () => now,
+    });
+
+    await service.create({
+      prompt: "/compact",
+      cadence: { type: "every", everyMs: 60_000 },
+      target: { type: "new-agent", config: { provider: "claude", cwd: tempDir } },
+      maxRuns: 1,
+    });
+    await service.tick();
+
+    expect(createdInputs).toHaveLength(1);
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: createdInputs[0].workspaceId,
+      label: { name: "SUB", color: "sky" },
+      assigned: true,
+    });
+  });
+
   test("scheduled new-agent run output falls back to final text and curated timeline", async () => {
     let runCount = 0;
     const manager = new AgentManager({

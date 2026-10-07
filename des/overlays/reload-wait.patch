@@ -1,5 +1,5 @@
 diff --git a/packages/server/src/server/agent/agent-manager.test.ts b/packages/server/src/server/agent/agent-manager.test.ts
-index 2f9cd425a..5392d7323 100644
+index 6396fc589..5ec2df0af 100644
 --- a/packages/server/src/server/agent/agent-manager.test.ts
 +++ b/packages/server/src/server/agent/agent-manager.test.ts
 @@ -2582,6 +2582,132 @@ test("failed reload retains the closed agent for a later resume", async () => {
@@ -136,10 +136,10 @@ index 2f9cd425a..5392d7323 100644
    "reload does not resume when the previous session close fails: %s",
    async (failure) => {
 diff --git a/packages/server/src/server/agent/agent-manager.ts b/packages/server/src/server/agent/agent-manager.ts
-index 87d3b290a..1a093fd3a 100644
+index 9e809a457..c9bb7b5e0 100644
 --- a/packages/server/src/server/agent/agent-manager.ts
 +++ b/packages/server/src/server/agent/agent-manager.ts
-@@ -385,6 +385,35 @@ function resolveInitialAttention(input: AttentionState | undefined): AttentionSt
+@@ -383,6 +383,35 @@ function resolveInitialAttention(input: AttentionState | undefined): AttentionSt
    };
  }
  
@@ -175,7 +175,7 @@ index 87d3b290a..1a093fd3a 100644
  interface StreamEventFlags {
    shouldDispatchEvent: boolean;
    shouldNotifyWaiters: boolean;
-@@ -1173,6 +1202,16 @@ export class AgentManager {
+@@ -1176,6 +1205,16 @@ export class AgentManager {
      await this.inFlightAgentCloses?.get(agentId)?.catch(() => undefined);
    }
  
@@ -192,7 +192,7 @@ index 87d3b290a..1a093fd3a 100644
    getTimeline(id: string): AgentTimelineItem[] {
      this.requireAgent(id);
      return this.timelineStore.getItems(id);
-@@ -1519,8 +1558,8 @@ export class AgentManager {
+@@ -1522,8 +1561,8 @@ export class AgentManager {
      const rehydrateFromDisk = options?.rehydrateFromDisk ?? false;
      const preservedHistoryPrimed = existing.historyPrimed;
      const preservedLastUsage = existing.lastUsage;
@@ -204,10 +204,10 @@ index 87d3b290a..1a093fd3a 100644
      const provider = handle?.provider ?? existing.provider;
      const client = this.requireClient(provider);
 diff --git a/packages/server/src/server/session.test.ts b/packages/server/src/server/session.test.ts
-index 7eddaea7d..44e9732cd 100644
+index dd25afa34..a89de44cb 100644
 --- a/packages/server/src/server/session.test.ts
 +++ b/packages/server/src/server/session.test.ts
-@@ -6140,3 +6140,87 @@ describe("agent-created SUB workspace label overlay", () => {
+@@ -6142,3 +6142,87 @@ describe("agent-created SUB workspace label overlay", () => {
      }
    });
  });
@@ -296,10 +296,10 @@ index 7eddaea7d..44e9732cd 100644
 +  expect(response?.payload.lastMessage).toBe("post-reload answer");
 +});
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index 6926ea4e7..066db6fb1 100644
+index a3464221d..bfe0281b1 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -8186,6 +8186,12 @@ export class Session {
+@@ -8207,6 +8207,12 @@ export class Session {
      }
  
      const agentId = resolved.agentId;

@@ -1,5 +1,5 @@
 diff --git a/packages/server/src/server/agent/providers/pi/agent.test.ts b/packages/server/src/server/agent/providers/pi/agent.test.ts
-index f49971dcc..56a3da852 100644
+index c6384e1fa..8b3468f5a 100644
 --- a/packages/server/src/server/agent/providers/pi/agent.test.ts
 +++ b/packages/server/src/server/agent/providers/pi/agent.test.ts
 @@ -23,7 +23,7 @@ import {
@@ -11,7 +11,7 @@ index f49971dcc..56a3da852 100644
  import { createPiExtensionHost } from "./extensions/index.js";
  import { PiExtensionHost } from "./extensions/host.js";
  import type { PiModel, PiThinkingLevel } from "./rpc-types.js";
-@@ -2922,6 +2922,112 @@ describe("PiRpcAgentClient", () => {
+@@ -3054,6 +3054,112 @@ describe("PiRpcAgentClient", () => {
      ]);
    });
  
@@ -125,10 +125,10 @@ index f49971dcc..56a3da852 100644
      const { pi, session } = await createSession();
      const fakeSession = pi.latestSession();
 diff --git a/packages/server/src/server/agent/providers/pi/agent.ts b/packages/server/src/server/agent/providers/pi/agent.ts
-index 5f2dcfbcd..09dab56d6 100644
+index 38a1f9815..0c23c4911 100644
 --- a/packages/server/src/server/agent/providers/pi/agent.ts
 +++ b/packages/server/src/server/agent/providers/pi/agent.ts
-@@ -1144,6 +1144,9 @@ export class PiRpcAgentSession implements AgentSession {
+@@ -1190,6 +1190,9 @@ export class PiRpcAgentSession implements AgentSession {
    private outOfBandCompactionEmit: ((event: AgentStreamEvent) => void) | null = null;
    private outOfBandCompactionStarted = false;
    private outOfBandCompactionCompleted = false;
@@ -138,7 +138,7 @@ index 5f2dcfbcd..09dab56d6 100644
    private commandCache: AgentSlashCommand[] | null = null;
    private state: PiSessionState;
    private readonly currentModeId: string | null;
-@@ -1232,6 +1235,15 @@ export class PiRpcAgentSession implements AgentSession {
+@@ -1294,6 +1297,15 @@ export class PiRpcAgentSession implements AgentSession {
  
      void (async () => {
        try {
@@ -154,7 +154,7 @@ index 5f2dcfbcd..09dab56d6 100644
          const ack = await this.runtimeSession.prompt(payload.text, payload.images);
          this.activePromptRequestId = ack.requestId ?? null;
          const correlatedResult = ack.requestId
-@@ -1722,6 +1734,11 @@ export class PiRpcAgentSession implements AgentSession {
+@@ -1785,6 +1797,11 @@ export class PiRpcAgentSession implements AgentSession {
      this.outOfBandCompactionEmit = emit;
      this.outOfBandCompactionStarted = false;
      this.outOfBandCompactionCompleted = false;
@@ -166,7 +166,7 @@ index 5f2dcfbcd..09dab56d6 100644
      try {
        await this.runtimeSession.compact(customInstructions);
      } catch (error) {
-@@ -1749,6 +1766,8 @@ export class PiRpcAgentSession implements AgentSession {
+@@ -1812,6 +1829,8 @@ export class PiRpcAgentSession implements AgentSession {
          },
        });
      } finally {

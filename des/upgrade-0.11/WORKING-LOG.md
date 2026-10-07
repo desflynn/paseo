@@ -10,7 +10,7 @@
 - Des explicitly requires all live and spike plugin trees/assets to carry into 0.11.0-df; protect the daemon-served source paths during the branch switch.
 - October 1 owner UAT did not happen. The pre-UAT report is not owner UAT.
 - Never install an app or restart the production daemon during this preparation.
-- HOLD: Des deferred Paseo work to the host Pi upgrade. Do not carry further overlays or start a Paseo build until Pi Fixer Guy sends the explicit all-clear. Des asked to stop the helper and yeet current progress.
+- The host Pi hold is RELEASED after Des's Pi 1.0.4-df installation and independent verification. Resume the authorized Paseo carry-forward/build. Des subsequently authorized the Large4 picker addition and config-only reload; that bounded operation is complete. No further live config change, agent reload, app installation, or daemon restart is authorized.
 
 ## State
 
@@ -18,14 +18,14 @@
 - Preserved 0.10.3-df is pushed to origin at d3bfe1c3e; local and remote heads match.
 - Upgrade branch is based on upstream v0.11.0 (22488d450), with asset seed commit 5bc62547e. That commit carries all tracked des/, .agents/, .flight/, .claude/, .codex/ and .pi/ assets from preserved 0.10.3-df, leaving upstream core code unchanged.
 - The seed was prepared using a temporary Git index, not a worktree. Plugin tree hashes were checked before and after the branch switch and match the preserved branch exactly.
-- No 0.11 overlay implementation, dependency installation, or build has started. No new build process is running.
+- All eight required overlays are carried, plus the existing Pi MCP friendly-label candidate. Dependency installation, declarations, static/plugin/browser gates and root desktop build passed. Artifacts are prepared, not installed. Final commit/push remains pending.
 - The mistakenly created .dev/worktrees/0.11.0-df checkout was removed using the exact command approved by Des. The branch was kept.
 - No stash, reset, clean, or source discard has been performed.
 - Bead: paseo-98w, claimed.
 
 ## Preservation inventory
 
-Repo-owned candidates to commit on 0.10.3-df:
+Repo-owned candidates committed on preserved 0.10.3-df:
 
 - tool-results-spike implementation, behavioural tests, and worklogs.
 - Its host-transformer and browser regressions in the existing app suites.
@@ -74,11 +74,48 @@ Exclusion preserves these files on disk; nothing is deleted. Branch-exit audit m
 - Plugin tree fingerprints on preserved 0.10.3-df: semantic-markdown debbbaaccc38fb1ac5f94520b12178fc59461d2e; render-probe 4695edcdc6b485b5a858fa280599fc275d3157e0; tool-results-spike 50670756ae3870d09090e2eb75d432cac09155be.
 - Preserve these plugin trees/assets before changing checkout; the production plugin registry uses paths in this checkout.
 
+## Completed carry-forward helpers
+
+- Pi helper 6f12c7ef-a55e-4d3c-8456-09580b20ff2c, Pi/ZAI GLM-5.3-Flash high, carried hold/trust/status and the separate live MCP label hunks. New-base RED proofs and full GREEN: agent 127/127, runtime 33/33. See PI-CARRY-WORKLOG.md. No child commits or shared-index mutations.
+- Claude helper 421917c5-1844-45e2-94da-e608a33841d0, Pi/ZAI GLM-5.3-Flash high, carried stale-row handling while retaining upstream background-helper survival. New-base RED 6 failures/60 passes; restored GREEN 66/66 across three owned files. See CLAUDE-CARRY-WORKLOG.md. Harvested and archived.
+
+## Overlay carry progress
+
+- Unsigned macOS build: patch applied cleanly after dated package/electron-builder backups. npm install completed (4 added, 1 removed; 2688 packages audited). All 13 resolved install-script versions are explicitly approved; no obsolete approvals. Lockfile backup retained locally.
+- npm audit summary: 149 vulnerabilities (9 low, 46 moderate, 84 high, 10 critical). No audit-fix sweep or extra dependency changes; review required before any later installation/release.
+- Shared protocol/client/highlight/plugin/relay declaration build passed; log /tmp/paseo-011-server-deps.log.
+- MINE: carried tests first; RED confirmed missing owner workspace assignment. Source applied cleanly; focused owner-label tests GREEN 4/4. Logs /tmp/paseo-011-mine-red.log and /tmp/paseo-011-mine-green.log. Regenerated clean patch against v0.11.0; pre-SUB baseline tree ae2b83c05cfbd49c317d346132221f1460020dfa.
+
+- SUB: new-base tests RED before source; combined MINE/SUB/schedule label slice GREEN 9/9. Clean SUB delta captured after MINE. Logs /tmp/paseo-011-sub-red.log and /tmp/paseo-011-labels-green.log.
+- Reload-wait: tests first, RED missing waitForAgentReload; source then GREEN 4/4, including real-error preservation. Logs /tmp/paseo-011-reload-red.log and /tmp/paseo-011-reload-green.log. Clean delta captured after SUB.
+- ACP context-meter retired for this base: upstream 48329facc is included. Historical patch retained, never applied.
+- Root guidance and spike host/browser tests carried cleanly. Host regression initially RED exposed an omitted existing candidate: cde2d2d75 Pi MCP friendly labels. Carried display helper, adapter, history, live emission and browser regressions; one history-test anchor conflict hand-resolved with both upstream custom-message and carried MCP cases retained. Parent label suites GREEN 39/39; rebuilt client, host suite GREEN 8/8. No wire schema changed; metadata override remains optional.
+- Server/CLI build GREEN: /tmp/paseo-011-server-build.log, exit 0. Shared declarations refreshed before diagnosing cross-package types.
+- All nine active patches replay onto pristine v0.11.0 and reproduce 30 carried files byte-for-byte, also after scoped formatting. Normalized the helper's two short old-file headers before integrating the full MCP label patch. Proof /tmp/paseo-011-overlay-replay-proof.txt. No source mismatch.
+- Final parent suites GREEN: session 157/157, schedule 61/61, agent-manager 196/196 (414 total). Root and semantic-plugin typecheck GREEN; scoped format on 38 regular owned files and source lint GREEN, zero warnings/errors. Symlink targets untouched.
+- Plugin compatibility on the new SDK: semantic tests 153/153; tool-results spike 80/80; render-probe typecheck GREEN. Build/test outputs leave all tracked plugin assets byte-identical to preserved source; no live plugin reload.
+- Browser compatibility GREEN 8/8: wide/phone raw inspection, streamed MCP-shaped rows, failed/canceled grouped history and server/action badges. Initial launch failure was missing cached browser revision 1208, not rendering; reused installed headless Chromium 1234 through an ignored temporary config. No browser installation or production profile. Log /tmp/paseo-011-browser-reuse.log.
+- Two inspection cases repeated only for visual proof. Runner end-of-test captures occurred after fixture cleanup and showed unavailable workspaces; rejected as proof. The existing test already writes valid pre-cleanup /tmp/tool-results-spike-1100.png and /tmp/tool-results-spike-390.png; both inspected. Wide table and readable stacked phone cards confirmed. No test source change. Temporary-config original snapshot retained as playwright.config.ts.bak-20261007; backup was made after the capture-only edit, a procedural miss.
+- Tool-results spike typecheck also GREEN. Focused unit/plugin total: 920 unique cases, plus eight unique browser cases; subset/visual reruns are not counted again.
+
+## Large4 side task
+
+- Des authorized appending only mistral/mistral-large-4 to the live Pi picker. Config backup: /Users/des/.paseo/config.json.bak-20261007-large4. Existing 17 entries and every other field proved unchanged; live catalogue now 18, Off/High only, High default.
+- Config-only reload succeeded with appliedPaths=[agents.providers], restartRequiredPaths=[]. No inference, daemon restart, app installation, or unrelated agent reload.
+- Pi-owned effective proof independently read: context 400000, inputs text+image, reserve 50000, boundary 350000 verified; inherited key absent but real resolver succeeds; inferenceRequests=0. Proof /tmp/pi-large4-effective-proof.json; activation returned to Pi Fixer Guy with pickup confirmed.
+- Des asked Global Persona Guy to classify this exact model as NARROWBODY in Fleet Doctrine/personas. Sent to 55e52eca-65c9-486a-bf2f-3dc49b861f11; pickup confirmed. Guy owns completion; no polling or runtime changes requested.
+
+## Build and artifact proof
+
+- Root npm run build:desktop GREEN; log /tmp/paseo-011-desktop-build.log. Unsigned arm64 app: /Users/des/dev/paseo/packages/desktop/release/mac-arm64/Paseo.app. CFBundleShortVersionString and packaged server version both 0.11.0; DF identity is the branch/carry, not an invented package version.
+- App ASAR modules for session, agent-manager, Pi agent/runtime/trust and Claude agent match checkout compiled outputs byte-for-byte. Package build pruned native modules from 312.6 MB to 91.5 MB.
+- DMG: 185152048 bytes; SHA-256 cc69fa3db6d1c101877b7488b60ed1b9ef55a6f56eeb297d443c19561e0ca3f5.
+- ZIP: 179055444 bytes; SHA-256 bb34706f0d9ee9a27a97d09ef4d356b05eeadb31955a827eb906ef9d3aaf11c1.
+- Live non-interference: installed /Applications/Paseo.app remains 0.10.3. Supervisor PID 1385 and listener/daemon child PID 1398 both started October 5. Earlier summary conflated supervisor and listener; corrected by ps/lsof, not assumed. No install or daemon restart.
+- Python plistlib failed against the host XML library; used native PlistBuddy instead. No host dependency repair.
+
 ## Pending
 
-- Commit/push this pause journal and the asset seed to origin/0.11.0-df. This is preparatory preservation, not a verified 0.11 desktop build.
-- Wait for Pi Fixer Guy's explicit all-clear. No polling wake or implementation/build work during the hold.
-- After all-clear, reread this log and UPDATE-CHECK.md, then carry the eight required overlays in README order; retire ACP context-meter because upstream 48329facc is included.
-- Assess the preserved tool-results-spike host/browser tests and local root guidance on 0.10.3-df for migration into the upstream core tree. Assets are carried, but these core-file candidates are not yet ported.
-- Run npm dependency installation/allowScripts review, focused overlay and plugin compatibility tests, cross-package declarations/static gates, and root desktop build. Do not install or restart the production daemon.
-- Footer copy/check interaction and MP3 desktop/phone checks remain unverified; do not claim owner/device UAT.
+- Last pushed upgrade HEAD 7e289ff2f. Commit/push verified upgrade by explicit paths after final scope/secret/format checks; close paseo-98w when delivery is recorded.
+- Do not install or restart the production daemon. npm's 149 vulnerabilities require review before later installation/release; no automatic security/dependency sweep.
+- October 1 owner UAT did not happen. Footer copy/check and MP3 desktop/phone checks remain unverified; no owner/device UAT is claimed.

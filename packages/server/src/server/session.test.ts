@@ -26,11 +26,20 @@ import { Session } from "./session.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
 import { StructuredAgentFallbackError } from "./agent/agent-response-loop.js";
+import { sendPromptToAgent } from "./agent/agent-prompt.js";
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
 import type { AgentManagerEvent } from "./agent/agent-manager.js";
 import type { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
-import { WorkspaceLabelError, type WorkspaceLabelService } from "./workspace-labels/index.js";
-import { createPersistedProjectRecord } from "./workspace-registry.js";
+import {
+  WorkspaceLabelError,
+  createWorkspaceLabelService,
+  type WorkspaceLabelService,
+} from "./workspace-labels/index.js";
+import {
+  createPersistedProjectRecord,
+  createPersistedWorkspaceRecord,
+  FileBackedWorkspaceRegistry,
+} from "./workspace-registry.js";
 import { deriveProjectKey } from "./project-key.js";
 import type { SessionOptions } from "./session.js";
 import type { SessionInboundMessage, SessionOutboundMessage } from "./messages.js";
@@ -287,8 +296,18 @@ vi.mock("./worktree-bootstrap.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./agent/agent-prompt.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./agent/agent-prompt.js")>();
+  return {
+    ...actual,
+    sendPromptToAgent: vi.fn(),
+    waitForAgentRunStartWithTimeout: vi.fn(),
+  };
+});
+
 interface SessionForTestOptions {
   clientId?: string;
+  clientType?: "mobile" | "browser" | "cli" | "mcp" | "hub";
   permissions?: readonly DaemonPermission[];
   agentManager?: { [K in keyof SessionOptions["agentManager"]]?: unknown };
   agentStorage?: { [K in keyof SessionOptions["agentStorage"]]?: unknown };
@@ -332,6 +351,7 @@ interface SessionForTestOptions {
   pluginRuntime?: SessionOptions["pluginRuntime"];
   orchestrationSkills?: SessionOptions["orchestrationSkills"];
   workspaceLabelService?: WorkspaceLabelService;
+  creationService?: SessionOptions["creationService"];
 }
 
 function createSessionForTest(options: SessionForTestOptions = {}): Session {
@@ -368,8 +388,9 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
 
   const sessionOptions: SessionOptions = {
     messageReceipts: createMessageReceiptsStub(),
-    creationService: createTestCreationService(),
+    creationService: options.creationService ?? createTestCreationService(),
     clientId: options.clientId ?? "test-client",
+    clientType: options.clientType,
     onMessage: (message) => messages.push(message),
     ...(options.targetedMessages
       ? {
@@ -5811,4 +5832,397 @@ test("provider snapshots preserve versionless visibility while capabilities upda
     "plugin-provider",
   ]);
   expect(references.compactSnapshot!.entries[0]!.modes![0]!.icon).toBe("ShieldCheck");
+});
+
+describe("owner MINE workspace label overlay", () => {
+  const MINE_LABEL = { name: "MINE", color: "indigo" as const };
+
+  function createLabelRecordingService(): {
+    setAssignment: ReturnType<typeof vi.fn>;
+    service: WorkspaceLabelService;
+  } {
+    const setAssignment = vi.fn(
+      async (input: {
+        workspaceId: string;
+        label: { name: string; color: string };
+        assigned: boolean;
+      }) => ({
+        label: input.label,
+        workspaceLabels: input.assigned ? [input.label.name] : [],
+      }),
+    );
+    return { setAssignment, service: { setAssignment } as unknown as WorkspaceLabelService };
+  }
+
+  function storedAgent(): StoredAgentRecord {
+    return {
+      id: "agent-1",
+      internal: false,
+      title: "Agent 1",
+      workspaceId: "ws-1",
+    } as StoredAgentRecord;
+  }
+
+  function sendRequest(requestId: string) {
+    return {
+      type: "send_agent_message_request" as const,
+      requestId,
+      agentId: "agent-1",
+      text: "hello",
+    };
+  }
+
+  test("a mobile session creating an agent labels the agent's workspace MINE", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const creationService = {
+      create: vi.fn(async () => ({
+        kind: "agent",
+        idempotencyKey: "request-create",
+        revision: 0,
+        phase: "completed",
+        workspaceId: "ws-1",
+        agentId: "agent-1",
+        agent: { id: "agent-1", workspaceId: "ws-1" },
+        error: null,
+      })),
+      subscribe: vi.fn(),
+    } as unknown as SessionOptions["creationService"];
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({
+      clientType: "mobile",
+      messages,
+      workspaceLabelService: service,
+      creationService,
+    });
+
+    await session.handleMessage({
+      type: "agent.create.request",
+      requestId: "request-create",
+      config: { provider: "codex", cwd: "/tmp/repo" },
+    } as unknown as SessionInboundMessage);
+
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      label: MINE_LABEL,
+      assigned: true,
+    });
+    expect(messages.some((message) => message.type === "agent.create.response")).toBe(true);
+  });
+
+  test("a mobile session sending a message labels the agent's workspace MINE", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({
+      clientType: "mobile",
+      messages,
+      workspaceLabelService: service,
+      agentStorage: {
+        list: vi.fn().mockResolvedValue([storedAgent()]),
+        get: vi.fn().mockResolvedValue(storedAgent()),
+      },
+    });
+    vi.mocked(sendPromptToAgent).mockResolvedValue({ disposition: "steered" });
+
+    await session.handleMessage(sendRequest("request-send"));
+
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      label: MINE_LABEL,
+      assigned: true,
+    });
+    const response = messages.find((message) => message.type === "send_agent_message_response");
+    expect(
+      response && response.type === "send_agent_message_response" && response.payload.accepted,
+    ).toBe(true);
+  });
+
+  test("a cli session sending a message does not label the workspace MINE", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const session = createSessionForTest({
+      clientType: "cli",
+      workspaceLabelService: service,
+      agentStorage: {
+        list: vi.fn().mockResolvedValue([storedAgent()]),
+        get: vi.fn().mockResolvedValue(storedAgent()),
+      },
+    });
+    vi.mocked(sendPromptToAgent).mockResolvedValue({ disposition: "steered" });
+
+    await session.handleMessage(sendRequest("request-cli-send"));
+
+    expect(setAssignment).not.toHaveBeenCalled();
+  });
+
+  test("labeling an already-labeled workspace keeps exactly one MINE", async () => {
+    const paseoHome = mkdtempSync(join(tmpdir(), "paseo-mine-"));
+    try {
+      const registry = new FileBackedWorkspaceRegistry(
+        join(paseoHome, "projects", "workspaces.json"),
+        pino({ level: "silent" }),
+      );
+      await registry.upsert(
+        createPersistedWorkspaceRecord({
+          workspaceId: "ws-1",
+          projectId: "prj-1",
+          cwd: "/repo",
+          kind: "local_checkout",
+          displayName: "main",
+          createdAt: "2026-10-04T00:00:00.000Z",
+          updatedAt: "2026-10-04T00:00:00.000Z",
+        }),
+      );
+      const labelService = createWorkspaceLabelService({
+        paseoHome,
+        workspaceRegistry: registry,
+      });
+      await labelService.setAssignment({ workspaceId: "ws-1", label: MINE_LABEL, assigned: true });
+      const setAssignment = vi.spyOn(labelService, "setAssignment");
+      const session = createSessionForTest({
+        clientType: "mobile",
+        workspaceLabelService: labelService,
+        agentStorage: {
+          list: vi.fn().mockResolvedValue([storedAgent()]),
+          get: vi.fn().mockResolvedValue(storedAgent()),
+        },
+      });
+      vi.mocked(sendPromptToAgent).mockResolvedValue({ disposition: "steered" });
+
+      await session.handleMessage(sendRequest("request-repeat"));
+
+      expect(setAssignment).toHaveBeenCalledWith({
+        workspaceId: "ws-1",
+        label: MINE_LABEL,
+        assigned: true,
+      });
+      expect((await registry.get("ws-1"))?.labels).toEqual(["MINE"]);
+    } finally {
+      rmSync(paseoHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("agent-created SUB workspace label overlay", () => {
+  const SUB_LABEL = { name: "SUB", color: "sky" as const };
+
+  function createLabelRecordingService(): {
+    setAssignment: ReturnType<typeof vi.fn>;
+    service: WorkspaceLabelService;
+  } {
+    const setAssignment = vi.fn(
+      async (input: {
+        workspaceId: string;
+        label: { name: string; color: string };
+        assigned: boolean;
+      }) => ({
+        label: input.label,
+        workspaceLabels: input.assigned ? [input.label.name] : [],
+      }),
+    );
+    return { setAssignment, service: { setAssignment } as unknown as WorkspaceLabelService };
+  }
+
+  function creationServiceReturning(agent: { id: string; workspaceId: string } | null) {
+    return {
+      create: vi.fn(async () => ({
+        kind: "agent",
+        idempotencyKey: "request-create",
+        revision: 0,
+        phase: "completed",
+        workspaceId: agent?.workspaceId ?? "ws-1",
+        agentId: agent?.id ?? null,
+        agent: agent ?? null,
+        error: null,
+      })),
+      subscribe: vi.fn(),
+    } as unknown as SessionOptions["creationService"];
+  }
+
+  function sendCreateRequest(requestId: string) {
+    return {
+      type: "agent.create.request" as const,
+      requestId,
+      config: { provider: "codex", cwd: "/tmp/repo" },
+    } as unknown as SessionInboundMessage;
+  }
+
+  test("a cli session creating an agent alone in its workspace labels the workspace SUB", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({
+      clientType: "cli",
+      messages,
+      workspaceLabelService: service,
+      creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
+    });
+
+    await session.handleMessage(sendCreateRequest("request-sub-create"));
+
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      label: SUB_LABEL,
+      assigned: true,
+    });
+    expect(messages.some((message) => message.type === "agent.create.response")).toBe(true);
+  });
+
+  test("a cli session creating an agent into an occupied workspace does not label SUB", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const session = createSessionForTest({
+      clientType: "cli",
+      workspaceLabelService: service,
+      creationService: creationServiceReturning({ id: "agent-2", workspaceId: "ws-1" }),
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: "agent-1", workspaceId: "ws-1", internal: false }]),
+      },
+    });
+
+    await session.handleMessage(sendCreateRequest("request-sub-occupied"));
+
+    expect(setAssignment).not.toHaveBeenCalled();
+  });
+
+  test("a mobile session creating an agent alone gets MINE only, never SUB", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const session = createSessionForTest({
+      clientType: "mobile",
+      workspaceLabelService: service,
+      creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
+    });
+
+    await session.handleMessage(sendCreateRequest("request-mobile-sub"));
+
+    expect(setAssignment).toHaveBeenCalledTimes(1);
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      label: { name: "MINE", color: "indigo" },
+      assigned: true,
+    });
+  });
+
+  test("labeling an already-SUB workspace keeps exactly one SUB", async () => {
+    const paseoHome = mkdtempSync(join(tmpdir(), "paseo-sub-"));
+    try {
+      const registry = new FileBackedWorkspaceRegistry(
+        join(paseoHome, "projects", "workspaces.json"),
+        pino({ level: "silent" }),
+      );
+      await registry.upsert(
+        createPersistedWorkspaceRecord({
+          workspaceId: "ws-1",
+          projectId: "prj-1",
+          cwd: "/repo",
+          kind: "local_checkout",
+          displayName: "main",
+          createdAt: "2026-10-04T00:00:00.000Z",
+          updatedAt: "2026-10-04T00:00:00.000Z",
+        }),
+      );
+      const labelService = createWorkspaceLabelService({
+        paseoHome,
+        workspaceRegistry: registry,
+      });
+      await labelService.setAssignment({ workspaceId: "ws-1", label: SUB_LABEL, assigned: true });
+      const setAssignment = vi.spyOn(labelService, "setAssignment");
+      const session = createSessionForTest({
+        clientType: "cli",
+        workspaceLabelService: labelService,
+        creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
+      });
+
+      await session.handleMessage(sendCreateRequest("request-sub-repeat"));
+
+      expect(setAssignment).toHaveBeenCalledWith({
+        workspaceId: "ws-1",
+        label: SUB_LABEL,
+        assigned: true,
+      });
+      expect((await registry.get("ws-1"))?.labels).toEqual(["SUB"]);
+    } finally {
+      rmSync(paseoHome, { recursive: true, force: true });
+    }
+  });
+});
+
+test("wait_for_finish during an in-flight reload waits for the reload instead of serving the stored error", async () => {
+  const agentId = "22222222-2222-4222-8222-222222222222";
+  let releaseReload: () => void = () => {};
+  const reloadSettled = new Promise<void>((resolve) => {
+    releaseReload = resolve;
+  });
+
+  const liveAgent = {
+    id: agentId,
+    provider: "codex",
+    cwd: "/tmp/work",
+    config: {},
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lifecycle: "idle",
+    currentModeId: null,
+    availableModes: [],
+    pendingPermissions: new Map(),
+    persistence: null,
+    historyPrimed: true,
+    lastUserMessageAt: null,
+    activeTurnId: null,
+    activeTurnStartedAt: null,
+    attention: { requiresAttention: false },
+    foregroundTurnWaiters: new Set(),
+    finalizedForegroundTurnIds: new Set(),
+    unsubscribeSession: null,
+    labels: {},
+    capabilities: {},
+    session: {},
+  } as unknown as NonNullable<ReturnType<SessionOptions["agentManager"]["getAgent"]>>;
+
+  const getAgent = vi.fn(
+    () => null as NonNullable<ReturnType<SessionOptions["agentManager"]["getAgent"]>> | null,
+  );
+  getAgent.mockReturnValueOnce(null).mockReturnValue(liveAgent);
+
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    agentManager: {
+      listAgents: vi.fn(() => [liveAgent]),
+      getAgent,
+      waitForAgentReload: vi.fn(() => reloadSettled),
+      waitForAgentEvent: vi.fn(async () => ({
+        status: "idle",
+        permission: null,
+        lastMessage: "post-reload answer",
+      })),
+    },
+    agentStorage: {
+      get: vi.fn().mockResolvedValue({
+        id: agentId,
+        provider: "codex",
+        cwd: "/tmp/work",
+        createdAt: new Date().toISOString(),
+        lastStatus: "error",
+        lastError: "Pi RPC process is closed",
+        internal: false,
+      }),
+    },
+  });
+
+  const waitRequest = session.handleMessage({
+    type: "wait_for_finish_request",
+    requestId: "wait-during-reload",
+    agentId,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  // The reload is still in flight: no response may be served from the stored
+  // record's pre-reload error status.
+  expect(findByType(messages, "wait_for_finish_response")).toBeUndefined();
+
+  releaseReload();
+  await waitRequest;
+
+  const response = findByType(messages, "wait_for_finish_response");
+  expect(response?.payload.requestId).toBe("wait-during-reload");
+  expect(response?.payload.status).toBe("idle");
+  expect(response?.payload.error).toBeNull();
+  expect(response?.payload.lastMessage).toBe("post-reload answer");
 });

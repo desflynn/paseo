@@ -1,14 +1,3 @@
-commit 5e2d68b3d88d82b756be6581f89d56cfb8c1660e
-Author: Des Flynn <des@desflynn.com>
-Date:   Mon Oct 5 15:15:53 2026 +0100
-
-    Stop Claude subagent rows from staying running forever
-    
-    - An interrupt now cancels open legacy sidechain rows instead of dropping them silently.
-    - A successful turn end completes task-protocol foreground rows still marked running.
-    - Legacy rows are made only under subagent tools (Task/Agent/Workflow); MCP tool frames such as dci wait_for_agent no longer appear as nameless "Claude subagent" rows.
-    One stuck row pinned the whole workspace running (workspace-directory.ts). --no-verify: only the foreign plugin-timeline.spec.ts typecheck error blocks the hook.
-
 diff --git a/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts b/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts
 index efb452e9b..32d5e7d28 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts
@@ -127,10 +116,10 @@ index efb452e9b..32d5e7d28 100644
      queryFactory.mockImplementation(() => buildQueryMock(buildTailScenarioEvents(205)));
  
 diff --git a/packages/server/src/server/agent/providers/claude/agent.subagent-interrupt.test.ts b/packages/server/src/server/agent/providers/claude/agent.subagent-interrupt.test.ts
-index d4fc0bcc0..4db7396ba 100644
+index 1223bbc54..00dae3270 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.subagent-interrupt.test.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.subagent-interrupt.test.ts
-@@ -169,6 +169,64 @@ describe("subagent lifecycle across an interrupt", () => {
+@@ -195,6 +195,64 @@ describe("subagent lifecycle across an interrupt", () => {
      await session.close();
    });
  
@@ -196,10 +185,10 @@ index d4fc0bcc0..4db7396ba 100644
      const { session, subagentEvents } = await startInterruptibleTurn();
  
 diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
-index 04fef2b1f..44cc10fab 100644
+index d505689a9..82fec548c 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.ts
-@@ -4190,6 +4190,16 @@ class ClaudeAgentSession implements AgentSession {
+@@ -4331,6 +4331,16 @@ class ClaudeAgentSession implements AgentSession {
        ),
      ).map((event): AgentStreamEvent => ({ type: "provider_subagent", provider: "claude", event }));
      const routedId = canonicalSubagentId ?? parentToolUseId;
@@ -216,7 +205,7 @@ index 04fef2b1f..44cc10fab 100644
      return [...runtimeEvents, ...this.sidechainTracker.handleMessage(message, routedId)];
    }
  
-@@ -4479,6 +4489,14 @@ class ClaudeAgentSession implements AgentSession {
+@@ -4624,6 +4634,14 @@ class ClaudeAgentSession implements AgentSession {
      const usage = this.convertUsage(message, message.modelUsage);
      if (message.subtype === "success") {
        events.push(...this.sidechainTracker.finishAll("completed"));
@@ -231,7 +220,7 @@ index 04fef2b1f..44cc10fab 100644
        // Built-in slash commands (e.g. /voice, /usage, "Unknown command: …")
        // run client-side in the Claude CLI with no model turn — output_tokens
        // is 0 and the user-visible text is carried in `result`. Surface it only
-@@ -4763,7 +4781,12 @@ class ClaudeAgentSession implements AgentSession {
+@@ -4915,7 +4933,12 @@ class ClaudeAgentSession implements AgentSession {
        }
      }
      this.toolUseCache.clear();
@@ -246,11 +235,11 @@ index 04fef2b1f..44cc10fab 100644
      // the turn ended, the session did not. Wiping it would strand every task id the session still
      // holds — a backgrounded child that settles after the interrupt would find no descriptor to
 diff --git a/packages/server/src/server/agent/providers/claude/subagents/live-source.test.ts b/packages/server/src/server/agent/providers/claude/subagents/live-source.test.ts
-index 1eca4cedc..e657ae0eb 100644
+index b0bfc3d75..bde8d95eb 100644
 --- a/packages/server/src/server/agent/providers/claude/subagents/live-source.test.ts
 +++ b/packages/server/src/server/agent/providers/claude/subagents/live-source.test.ts
-@@ -511,6 +511,38 @@ describe("ClaudeTaskProtocolSource", () => {
-     expect(source.cancelRunningForegroundTasks()).toEqual([]);
+@@ -538,6 +538,38 @@ describe("ClaudeTaskProtocolSource", () => {
+     ]);
    });
  
 +  it("completes the foreground subagents a successful turn was still running", () => {
@@ -289,10 +278,10 @@ index 1eca4cedc..e657ae0eb 100644
      // The headline case: interrupt, continue, and the child that was told to outlive the turn
      // reports completion later. Wiping the routing table on cancel drops this on the floor and
 diff --git a/packages/server/src/server/agent/providers/claude/subagents/live-source.ts b/packages/server/src/server/agent/providers/claude/subagents/live-source.ts
-index 1a4452036..3a0ec618c 100644
+index 2149fae13..7765fbd30 100644
 --- a/packages/server/src/server/agent/providers/claude/subagents/live-source.ts
 +++ b/packages/server/src/server/agent/providers/claude/subagents/live-source.ts
-@@ -307,6 +307,26 @@ export class ClaudeTaskProtocolSource {
+@@ -313,6 +313,26 @@ export class ClaudeTaskProtocolSource {
      return observations;
    }
  

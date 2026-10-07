@@ -1,7 +1,9 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { InstalledPlugin } from "../types";
+import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import { transformTimelineItem } from "./model";
+import { transformToolCallItem } from "../../../../../des/plugins/tool-results-spike/shared/tool-call";
 
 function plugin(input: {
   id: string;
@@ -49,6 +51,35 @@ const toolCall = {
 };
 
 describe("plugin timeline transforms", () => {
+  it("accepts tool-results spike rows through the real host transformer", () => {
+    const source = {
+      ...toolCall,
+      name: "dci.wiki_search",
+      metadata: { toolDisplayName: "Dci > Wiki Search" },
+    };
+    const transformed = transformTimelineItem({
+      item: source,
+      phase: "complete",
+      sourceId: "mcp-source",
+      plugins: [
+        plugin({
+          id: "tool-results-spike",
+          transform: ({ item }: { item: AgentTimelineItem }) =>
+            item.type === "tool_call" ? transformToolCallItem(item) : undefined,
+        }),
+      ],
+    });
+    expect(transformed).toHaveLength(1);
+    expect(transformed?.[0].data).toMatchObject({
+      callId: "call-1",
+      name: "dci.wiki_search",
+      label: "Dci > Wiki Search",
+      status: "completed",
+      source,
+    });
+    expect(transformed?.[0].data).toEqual(JSON.parse(JSON.stringify(transformed?.[0].data)));
+  });
+
   it("adds installation and source identity to plain transformed items", () => {
     const transformed = transformTimelineItem({
       item: toolCall,

@@ -98,6 +98,7 @@ import {
   WorkspaceLabelStorageUncertainError,
   type WorkspaceLabelService,
 } from "./workspace-labels/index.js";
+import { maybeApplySubLabel } from "./workspace-labels/sub-label.js";
 
 import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
 import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
@@ -441,6 +442,7 @@ type AgentMcpTransportFactory = () => Promise<unknown>;
 export interface SessionOptions {
   browserToolsBroker?: BrowserToolsBroker | null;
   clientId: string;
+  clientType?: "mobile" | "browser" | "cli" | "mcp" | "hub" | null;
   permissions: readonly DaemonPermission[];
   appVersion?: string | null;
   clientCapabilities?: Record<string, unknown> | null;
@@ -697,6 +699,7 @@ export class Session {
   );
   private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
   private readonly clientId: string;
+  private readonly clientType: SessionOptions["clientType"];
   private readonly authorization: SessionAuthorization;
   private appVersion: string | null;
   private clientCapabilities: ReadonlySet<ClientCapability>;
@@ -858,6 +861,7 @@ export class Session {
     } = options;
     this.browserToolsBroker = options.browserToolsBroker;
     this.clientId = clientId;
+    this.clientType = options.clientType;
     this.authorization = new SessionAuthorization(permissions);
     this.appVersion = appVersion ?? null;
     this.clientCapabilities = parseClientCapabilities(clientCapabilities);
@@ -4011,6 +4015,11 @@ export class Session {
         request,
         progress ? (snapshot) => progress.emit(this.creationUpdate(snapshot)) : undefined,
       );
+      this.applyOwnerMineLabel(creation.agent?.workspaceId ?? creation.workspaceId);
+      this.applySubLabelForAgentTraffic(
+        creation.agent?.id,
+        creation.agent?.workspaceId ?? creation.workspaceId,
+      );
       this.emitForSource(
         {
           type: "agent.create.response",
@@ -4175,6 +4184,8 @@ export class Session {
       } else {
         agent = await this.createSessionAgent(msg);
       }
+      this.applyOwnerMineLabel(agent.workspaceId);
+      this.applySubLabelForAgentTraffic(agent.id, agent.workspaceId);
       this.emit({
         type: "status",
         payload: {
@@ -6373,6 +6384,35 @@ export class Session {
     }
   }
 
+  // MINE overlay (des/overlays): owner-origin activations get the MINE workspace label.
+  private applyOwnerMineLabel(workspaceId: string | null | undefined): void {
+    if (!workspaceId) return;
+    if (this.clientType !== "mobile" && this.clientType !== "browser") return;
+    this.workspaceLabelService
+      ?.setAssignment({ workspaceId, label: { name: "MINE", color: "indigo" }, assigned: true })
+      .catch((error) => {
+        this.sessionLogger.warn(
+          { err: error, workspaceId },
+          "Failed to assign MINE workspace label",
+        );
+      });
+  }
+
+  // SUB overlay (des/overlays): agent-created agents alone in their workspace get the SUB workspace label.
+  private applySubLabelForAgentTraffic(
+    agentId: string | null | undefined,
+    workspaceId: string | null | undefined,
+  ): void {
+    if (this.clientType === "mobile" || this.clientType === "browser") return;
+    maybeApplySubLabel({
+      agentId,
+      workspaceId,
+      agentManager: this.agentManager,
+      workspaceLabelService: this.workspaceLabelService,
+      logger: this.sessionLogger,
+    });
+  }
+
   private requireWorkspaceLabels(): WorkspaceLabelService {
     if (!this.workspaceLabelService) {
       throw new SessionRequestError("workspace_labels_unavailable", "Workspace labels unavailable");
@@ -8115,6 +8155,11 @@ export class Session {
         await send();
       }
 
+      const agentRecord = await this.agentStorage.get(agentId);
+      this.applyOwnerMineLabel(
+        agentRecord?.workspaceId ?? this.agentManager.getAgent(agentId)?.workspaceId,
+      );
+
       this.emit({
         type: "send_agent_message_response",
         payload: {
@@ -8162,6 +8207,12 @@ export class Session {
     }
 
     const agentId = resolved.agentId;
+    if (!this.agentManager.getAgent(agentId)) {
+      // A reload removes the agent from the live map for its whole duration;
+      // wait it out so the stored record's pre-reload status is not served as
+      // the wait result.
+      await this.agentManager.waitForAgentReload(agentId);
+    }
     const live = this.agentManager.getAgent(agentId);
     if (!live) {
       const record = await this.agentStorage.get(agentId);
