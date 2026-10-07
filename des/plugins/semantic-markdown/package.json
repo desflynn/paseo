@@ -1,0 +1,31 @@
+{
+  "name": "semantic-markdown-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paseo 0.9.2 Markdown parity plus semantic tags, foldable callouts, math, footnotes, and kbd keys.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node build.mjs && node --test spike.test.ts shared/extensions.test.ts shared/message-time.test.ts shared/read-audio.test.ts shared/markup-contract.test.ts shared/golden-corpus.test.ts shared/tex-unicode.test.ts shared/file-link.test.ts shared/agent-link.test.ts client/appearance.test.ts client/vendor/components/markdown-text.test.ts"
+  },
+  "dependencies": {
+    "@getpaseo/highlight": "file:../../../packages/highlight",
+    "htmlparser2": "^12.0.0",
+    "markdown-it": "10.0.0",
+    "react-native-markdown-display": "7.0.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@getpaseo/plugin": "0.9.2",
+    "@react-native/babel-preset": "0.81.5",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^20.9.0",
+    "@types/react": "~19.2.0",
+    "esbuild": "0.25.12",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3",
+    "zod": "^4.4.3"
+  }
+}

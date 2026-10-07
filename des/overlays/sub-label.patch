@@ -1,0 +1,437 @@
+diff --git a/packages/server/src/server/agent/tools/paseo-tools.ts b/packages/server/src/server/agent/tools/paseo-tools.ts
+index 07f9f2109..2f8470816 100644
+--- a/packages/server/src/server/agent/tools/paseo-tools.ts
++++ b/packages/server/src/server/agent/tools/paseo-tools.ts
+@@ -33,6 +33,8 @@ import {
+   type ArchiveDependencies,
+ } from "../../workspace-archive-service.js";
+ import { createAgentCommand, type CreateAgentFromMcpInput } from "../create-agent/create.js";
++import type { WorkspaceLabelService } from "../../workspace-labels/index.js";
++import { maybeApplySubLabel } from "../../workspace-labels/sub-label.js";
+ import type { VoiceCallerContext, VoiceSpeakHandler } from "../../voice-types.js";
+ import type { FirstAgentContext } from "../../messages.js";
+ import { everyMsToFiveFieldCron } from "@getpaseo/protocol/schedule/cadence";
+@@ -106,6 +108,7 @@ export interface PaseoToolHostDependencies {
+   terminalManager?: TerminalManager | null;
+   getDaemonTcpPort?: () => number | null;
+   scheduleService?: ScheduleService | null;
++  workspaceLabelService?: Pick<WorkspaceLabelService, "setAssignment"> | null;
+   providerSnapshotManager: ProviderSnapshotManager;
+   daemonConfigStore?: Pick<DaemonConfigStore, "get">;
+   github?: ForgeService;
+@@ -1500,6 +1503,15 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
+         },
+       );
+ 
++      // SUB overlay (des/overlays): agent-created agents alone in their workspace get the SUB workspace label.
++      maybeApplySubLabel({
++        agentId: snapshot.id,
++        workspaceId: snapshot.workspaceId,
++        agentManager,
++        workspaceLabelService: options.workspaceLabelService,
++        logger: childLogger,
++      });
++
+       try {
+         if (!createdInBackground && initialPromptStarted) {
+           const result = await waitForAgentWithTimeout(agentManager, snapshot.id, {
+diff --git a/packages/server/src/server/bootstrap.ts b/packages/server/src/server/bootstrap.ts
+index cfa955eac..97c692a9b 100644
+--- a/packages/server/src/server/bootstrap.ts
++++ b/packages/server/src/server/bootstrap.ts
+@@ -1344,6 +1344,7 @@ export async function createPaseoDaemon(
+     createDirectoryWorkspace: createScheduleLocalWorkspaceExternal,
+     createPaseoWorktreeWorkspace: createSchedulePaseoWorktreeExternal,
+     archiveWorkspace: archiveScheduleWorkspaceExternal,
++    workspaceLabelService,
+   });
+   await scheduleService.start();
+   agentManager.setAgentArchivedCallback(async (agentId) => {
+@@ -1373,6 +1374,7 @@ export async function createPaseoDaemon(
+     terminalManager,
+     getDaemonTcpPort: () => (boundListenTarget?.type === "tcp" ? boundListenTarget.port : null),
+     scheduleService,
++    workspaceLabelService,
+     providerSnapshotManager,
+     daemonConfigStore,
+     github,
+diff --git a/packages/server/src/server/schedule/service.test.ts b/packages/server/src/server/schedule/service.test.ts
+index 612bb7e9a..0570428f2 100644
+--- a/packages/server/src/server/schedule/service.test.ts
++++ b/packages/server/src/server/schedule/service.test.ts
+@@ -938,6 +938,78 @@ describe("ScheduleService", () => {
+     });
+   });
+ 
++  test("a schedule-created agent alone in its run workspace gets the SUB label", async () => {
++    const setAssignment = vi.fn(
++      async (input: {
++        workspaceId: string;
++        label: { name: string; color: string };
++        assigned: boolean;
++      }) => ({ label: input.label, workspaceLabels: [input.label.name] }),
++    );
++    const createdInputs: Parameters<ScheduleServiceOptions["createAgent"]>[0][] = [];
++    const manager = new AgentManager({
++      logger: createTestLogger(),
++      clients: createTestAgentClients(),
++      registry: agentStorage,
++    });
++    manager.runAgent = async () => ({
++      sessionId: "scheduled-sub-run",
++      finalText: "done",
++      timeline: [{ type: "assistant_message", text: "done" }],
++    });
++    manager.waitForAgentEvent = async () => ({
++      status: "idle",
++      permission: null,
++      lastMessage: "done",
++    });
++    const service = createScheduleService({
++      paseoHome: tempDir,
++      logger: createTestLogger(),
++      agentManager: manager,
++      agentStorage,
++      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
++      workspaceLabelService: { setAssignment } as never,
++      createAgent: async (input) => {
++        createdInputs.push(input);
++        const snapshot = {
++          id: "00000000-0000-0000-0000-000000000423",
++          provider: "claude",
++          cwd: input.cwd ?? tempDir,
++          workspaceId: input.workspaceId,
++          status: "idle",
++          lifecycle: "idle",
++        };
++        return {
++          snapshot: snapshot as Awaited<
++            ReturnType<ScheduleServiceOptions["createAgent"]>
++          >["snapshot"],
++          liveSnapshot: snapshot as Awaited<
++            ReturnType<ScheduleServiceOptions["createAgent"]>
++          >["liveSnapshot"],
++          background: true,
++          initialPromptStarted: false,
++          initialPromptError: null,
++        };
++      },
++      now: () => now,
++    });
++
++    await service.create({
++      prompt: "/compact",
++      cadence: { type: "every", everyMs: 60_000 },
++      target: { type: "new-agent", config: { provider: "claude", cwd: tempDir } },
++      maxRuns: 1,
++    });
++    await service.tick();
++
++    expect(createdInputs).toHaveLength(1);
++    expect(setAssignment).toHaveBeenCalledWith({
++      workspaceId: createdInputs[0].workspaceId,
++      label: { name: "SUB", color: "sky" },
++      assigned: true,
++    });
++  });
++
+   test("scheduled new-agent run output falls back to final text and curated timeline", async () => {
+     let runCount = 0;
+     const manager = new AgentManager({
+diff --git a/packages/server/src/server/schedule/service.ts b/packages/server/src/server/schedule/service.ts
+index 53d2432f8..01d3a0d1d 100644
+--- a/packages/server/src/server/schedule/service.ts
++++ b/packages/server/src/server/schedule/service.ts
+@@ -28,6 +28,8 @@ import type {
+   UpdateScheduleNewAgentConfig,
+ } from "@getpaseo/protocol/schedule/types";
+ import type { FirstAgentContext } from "@getpaseo/protocol/messages";
++import type { WorkspaceLabelService } from "../workspace-labels/index.js";
++import { maybeApplySubLabel } from "../workspace-labels/sub-label.js";
+ 
+ const SCHEDULE_TICK_INTERVAL_MS = 1000;
+ 
+@@ -214,6 +216,7 @@ type ScheduleAgentManager = Pick<
+     | "createAgent"
+     | "getRegisteredProviderIds"
+     | "hydrateTimelineFromProvider"
++    | "listAgents"
+     | "resumeAgentFromPersistence"
+     | "runAgent"
+     | "waitForAgentEvent"
+@@ -238,6 +241,7 @@ export interface ScheduleServiceOptions {
+     input: ScheduleWorkspaceCreateInput,
+   ) => Promise<CreatePaseoWorktreeWorkflowResult>;
+   archiveWorkspace: (workspaceId: string) => Promise<void>;
++  workspaceLabelService?: Pick<WorkspaceLabelService, "setAssignment"> | null;
+   now?: () => Date;
+   runner?: (schedule: StoredSchedule, runId: string) => Promise<ScheduleExecutionResult>;
+ }
+@@ -255,6 +259,7 @@ export class ScheduleService {
+     input: ScheduleWorkspaceCreateInput,
+   ) => Promise<CreatePaseoWorktreeWorkflowResult>;
+   private readonly archiveWorkspace: (workspaceId: string) => Promise<void>;
++  private readonly workspaceLabelService?: Pick<WorkspaceLabelService, "setAssignment"> | null;
+   private readonly now: () => Date;
+   private readonly runner: (
+     schedule: StoredSchedule,
+@@ -272,6 +277,7 @@ export class ScheduleService {
+     this.createDirectoryWorkspace = options.createDirectoryWorkspace;
+     this.createPaseoWorktreeWorkspace = options.createPaseoWorktreeWorkspace;
+     this.archiveWorkspace = options.archiveWorkspace;
++    this.workspaceLabelService = options.workspaceLabelService;
+     this.now = options.now ?? (() => new Date());
+     this.runner = options.runner ?? ((schedule, runId) => this.executeSchedule(schedule, runId));
+   }
+@@ -915,6 +921,14 @@ export class ScheduleService {
+       });
+       const agent = created.snapshot;
+       agentId = agent.id;
++      // SUB overlay (des/overlays): agent-created agents alone in their workspace get the SUB workspace label.
++      maybeApplySubLabel({
++        agentId,
++        workspaceId: workspace.workspaceId,
++        agentManager: this.agentManager,
++        workspaceLabelService: this.workspaceLabelService,
++        logger: this.logger,
++      });
+       await this.recordRunWorkspace({
+         scheduleId: schedule.id,
+         runId,
+diff --git a/packages/server/src/server/session.test.ts b/packages/server/src/server/session.test.ts
+index 1a2ed1854..7eddaea7d 100644
+--- a/packages/server/src/server/session.test.ts
++++ b/packages/server/src/server/session.test.ts
+@@ -5998,3 +5998,145 @@ describe("owner MINE workspace label overlay", () => {
+     }
+   });
+ });
++
++describe("agent-created SUB workspace label overlay", () => {
++  const SUB_LABEL = { name: "SUB", color: "sky" as const };
++
++  function createLabelRecordingService(): {
++    setAssignment: ReturnType<typeof vi.fn>;
++    service: WorkspaceLabelService;
++  } {
++    const setAssignment = vi.fn(
++      async (input: {
++        workspaceId: string;
++        label: { name: string; color: string };
++        assigned: boolean;
++      }) => ({
++        label: input.label,
++        workspaceLabels: input.assigned ? [input.label.name] : [],
++      }),
++    );
++    return { setAssignment, service: { setAssignment } as unknown as WorkspaceLabelService };
++  }
++
++  function creationServiceReturning(agent: { id: string; workspaceId: string } | null) {
++    return {
++      create: vi.fn(async () => ({
++        kind: "agent",
++        idempotencyKey: "request-create",
++        revision: 0,
++        phase: "completed",
++        workspaceId: agent?.workspaceId ?? "ws-1",
++        agentId: agent?.id ?? null,
++        agent: agent ?? null,
++        error: null,
++      })),
++      subscribe: vi.fn(),
++    } as unknown as SessionOptions["creationService"];
++  }
++
++  function sendCreateRequest(requestId: string) {
++    return {
++      type: "agent.create.request" as const,
++      requestId,
++      config: { provider: "codex", cwd: "/tmp/repo" },
++    } as unknown as SessionInboundMessage;
++  }
++
++  test("a cli session creating an agent alone in its workspace labels the workspace SUB", async () => {
++    const { setAssignment, service } = createLabelRecordingService();
++    const messages: SessionOutboundMessage[] = [];
++    const session = createSessionForTest({
++      clientType: "cli",
++      messages,
++      workspaceLabelService: service,
++      creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
++    });
++
++    await session.handleMessage(sendCreateRequest("request-sub-create"));
++
++    expect(setAssignment).toHaveBeenCalledWith({
++      workspaceId: "ws-1",
++      label: SUB_LABEL,
++      assigned: true,
++    });
++    expect(messages.some((message) => message.type === "agent.create.response")).toBe(true);
++  });
++
++  test("a cli session creating an agent into an occupied workspace does not label SUB", async () => {
++    const { setAssignment, service } = createLabelRecordingService();
++    const session = createSessionForTest({
++      clientType: "cli",
++      workspaceLabelService: service,
++      creationService: creationServiceReturning({ id: "agent-2", workspaceId: "ws-1" }),
++      agentManager: {
++        listAgents: vi.fn(() => [{ id: "agent-1", workspaceId: "ws-1", internal: false }]),
++      },
++    });
++
++    await session.handleMessage(sendCreateRequest("request-sub-occupied"));
++
++    expect(setAssignment).not.toHaveBeenCalled();
++  });
++
++  test("a mobile session creating an agent alone gets MINE only, never SUB", async () => {
++    const { setAssignment, service } = createLabelRecordingService();
++    const session = createSessionForTest({
++      clientType: "mobile",
++      workspaceLabelService: service,
++      creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
++    });
++
++    await session.handleMessage(sendCreateRequest("request-mobile-sub"));
++
++    expect(setAssignment).toHaveBeenCalledTimes(1);
++    expect(setAssignment).toHaveBeenCalledWith({
++      workspaceId: "ws-1",
++      label: { name: "MINE", color: "indigo" },
++      assigned: true,
++    });
++  });
++
++  test("labeling an already-SUB workspace keeps exactly one SUB", async () => {
++    const paseoHome = mkdtempSync(join(tmpdir(), "paseo-sub-"));
++    try {
++      const registry = new FileBackedWorkspaceRegistry(
++        join(paseoHome, "projects", "workspaces.json"),
++        pino({ level: "silent" }),
++      );
++      await registry.upsert(
++        createPersistedWorkspaceRecord({
++          workspaceId: "ws-1",
++          projectId: "prj-1",
++          cwd: "/repo",
++          kind: "local_checkout",
++          displayName: "main",
++          createdAt: "2026-10-04T00:00:00.000Z",
++          updatedAt: "2026-10-04T00:00:00.000Z",
++        }),
++      );
++      const labelService = createWorkspaceLabelService({
++        paseoHome,
++        workspaceRegistry: registry,
++      });
++      await labelService.setAssignment({ workspaceId: "ws-1", label: SUB_LABEL, assigned: true });
++      const setAssignment = vi.spyOn(labelService, "setAssignment");
++      const session = createSessionForTest({
++        clientType: "cli",
++        workspaceLabelService: labelService,
++        creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
++      });
++
++      await session.handleMessage(sendCreateRequest("request-sub-repeat"));
++
++      expect(setAssignment).toHaveBeenCalledWith({
++        workspaceId: "ws-1",
++        label: SUB_LABEL,
++        assigned: true,
++      });
++      expect((await registry.get("ws-1"))?.labels).toEqual(["SUB"]);
++    } finally {
++      rmSync(paseoHome, { recursive: true, force: true });
++    }
++  });
++});
+diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
+index 8243e5100..6926ea4e7 100644
+--- a/packages/server/src/server/session.ts
++++ b/packages/server/src/server/session.ts
+@@ -93,6 +93,7 @@ import {
+   WorkspaceLabelStorageUncertainError,
+   type WorkspaceLabelService,
+ } from "./workspace-labels/index.js";
++import { maybeApplySubLabel } from "./workspace-labels/sub-label.js";
+ 
+ import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
+ import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
+@@ -3995,6 +3996,10 @@ export class Session {
+         progress ? (snapshot) => progress.emit(this.creationUpdate(snapshot)) : undefined,
+       );
+       this.applyOwnerMineLabel(creation.agent?.workspaceId ?? creation.workspaceId);
++      this.applySubLabelForAgentTraffic(
++        creation.agent?.id,
++        creation.agent?.workspaceId ?? creation.workspaceId,
++      );
+       this.emitForSource(
+         {
+           type: "agent.create.response",
+@@ -4160,6 +4165,7 @@ export class Session {
+         agent = await this.createSessionAgent(msg);
+       }
+       this.applyOwnerMineLabel(agent.workspaceId);
++      this.applySubLabelForAgentTraffic(agent.id, agent.workspaceId);
+       this.emit({
+         type: "status",
+         payload: {
+@@ -6370,6 +6376,21 @@ export class Session {
+       });
+   }
+ 
++  // SUB overlay (des/overlays): agent-created agents alone in their workspace get the SUB workspace label.
++  private applySubLabelForAgentTraffic(
++    agentId: string | null | undefined,
++    workspaceId: string | null | undefined,
++  ): void {
++    if (this.clientType === "mobile" || this.clientType === "browser") return;
++    maybeApplySubLabel({
++      agentId,
++      workspaceId,
++      agentManager: this.agentManager,
++      workspaceLabelService: this.workspaceLabelService,
++      logger: this.sessionLogger,
++    });
++  }
++
+   private requireWorkspaceLabels(): WorkspaceLabelService {
+     if (!this.workspaceLabelService) {
+       throw new SessionRequestError("workspace_labels_unavailable", "Workspace labels unavailable");
+diff --git a/packages/server/src/server/workspace-labels/sub-label.ts b/packages/server/src/server/workspace-labels/sub-label.ts
+new file mode 100644
+index 000000000..1580ba424
+--- /dev/null
++++ b/packages/server/src/server/workspace-labels/sub-label.ts
+@@ -0,0 +1,28 @@
++import type { Logger } from "pino";
++
++import type { WorkspaceLabelService } from "./index.js";
++
++// SUB overlay (des/overlays): agent-created agents alone in their workspace get the SUB workspace label.
++export function maybeApplySubLabel(deps: {
++  agentId: string | null | undefined;
++  workspaceId: string | null | undefined;
++  agentManager: { listAgents(): Array<{ id: string; workspaceId?: string }> };
++  workspaceLabelService?: Pick<WorkspaceLabelService, "setAssignment"> | null;
++  logger: Logger;
++}): void {
++  const { agentId, workspaceId, agentManager, workspaceLabelService, logger } = deps;
++  if (!agentId || !workspaceId || !workspaceLabelService) return;
++  const occupied = agentManager
++    .listAgents()
++    .some((agent) => agent.id !== agentId && agent.workspaceId === workspaceId);
++  if (occupied) return;
++  workspaceLabelService
++    .setAssignment({
++      workspaceId,
++      label: { name: "SUB", color: "sky" },
++      assigned: true,
++    })
++    .catch((error) => {
++      logger.warn({ err: error, workspaceId }, "Failed to assign SUB workspace label");
++    });
++}

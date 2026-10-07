@@ -1,0 +1,321 @@
+commit 5e2d68b3d88d82b756be6581f89d56cfb8c1660e
+Author: Des Flynn <des@desflynn.com>
+Date:   Mon Oct 5 15:15:53 2026 +0100
+
+    Stop Claude subagent rows from staying running forever
+    
+    - An interrupt now cancels open legacy sidechain rows instead of dropping them silently.
+    - A successful turn end completes task-protocol foreground rows still marked running.
+    - Legacy rows are made only under subagent tools (Task/Agent/Workflow); MCP tool frames such as dci wait_for_agent no longer appear as nameless "Claude subagent" rows.
+    One stuck row pinned the whole workspace running (workspace-directory.ts). --no-verify: only the foreign plugin-timeline.spec.ts typecheck error blocks the hook.
+
+diff --git a/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts b/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts
+index efb452e9b..32d5e7d28 100644
+--- a/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts
++++ b/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts
+@@ -553,6 +553,112 @@ describe("ClaudeAgentSession sub-agent sidechain updates", () => {
+     ).toMatchObject({ type: "upsert", id: "task-tail-1", status: "failed" });
+   });
+ 
++  test("derives no provider subagent row from a non-subagent parent tool", async () => {
++    // Frames naming an MCP parent tool are not a child of anything. Deriving a row from them
++    // materializes a nameless "Claude subagent" stuck "running" that nothing will ever finish —
++    // the row that pins a whole workspace "running".
++    queryFactory.mockImplementation(() =>
++      buildQueryMock([
++        {
++          type: "system",
++          subtype: "init",
++          session_id: "mcp-parent-session",
++          permissionMode: "default",
++          model: "opus",
++        },
++        {
++          type: "stream_event",
++          parent_tool_use_id: null,
++          event: {
++            type: "content_block_start",
++            index: 0,
++            content_block: {
++              type: "tool_use",
++              id: "toolu_mcp_wait_1",
++              name: "mcp__dci__paseo_wait_for_agent",
++              input: { agentId: "f6460537" },
++            },
++          },
++        },
++        {
++          type: "assistant",
++          parent_tool_use_id: "toolu_mcp_wait_1",
++          message: { content: [{ type: "text", text: "waiting on the child" }] },
++        },
++        {
++          type: "result",
++          subtype: "success",
++          usage: {
++            input_tokens: 1,
++            cache_read_input_tokens: 0,
++            output_tokens: 1,
++          },
++          total_cost_usd: 0,
++        },
++      ]),
++    );
++    const session = await new ClaudeAgentClient({
++      logger,
++      queryFactory,
++      resolveBinary: async () => "/test/claude/bin",
++    }).createSession({ provider: "claude", cwd: process.cwd() });
++
++    const events = await collectUntilTerminal(streamSession(session, "wait on the agent"));
++    await session.close();
++
++    expect(events.filter((event) => event.type === "provider_subagent")).toEqual([]);
++  });
++
++  test("terminalizes a running Task subagent when the parent turn succeeds", async () => {
++    // The turn ended in success, so no foreground child of it can still be working. Claude's own
++    // notification may never arrive — without this the row stays "running" forever.
++    queryFactory.mockImplementation(() =>
++      buildQueryMock([
++        {
++          type: "system",
++          subtype: "init",
++          session_id: "success-terminal-session",
++          permissionMode: "default",
++          model: "opus",
++        },
++        {
++          type: "system",
++          subtype: "task_started",
++          task_id: "success-task-1",
++          tool_use_id: "task-success-1",
++          task_type: "local_agent",
++          subagent_type: "Explore",
++          description: "Foreground child of a successful turn",
++        },
++        {
++          type: "result",
++          subtype: "success",
++          usage: {
++            input_tokens: 1,
++            cache_read_input_tokens: 0,
++            output_tokens: 1,
++          },
++          total_cost_usd: 0,
++        },
++      ]),
++    );
++    const session = await new ClaudeAgentClient({
++      logger,
++      queryFactory,
++      resolveBinary: async () => "/test/claude/bin",
++    }).createSession({ provider: "claude", cwd: process.cwd() });
++
++    const events = await collectUntilTerminal(streamSession(session, "delegate work"));
++    await session.close();
++
++    expect(
++      events
++        .filter((event) => event.type === "provider_subagent")
++        .map((event) => event.event)
++        .at(-1),
++    ).toMatchObject({ type: "upsert", id: "task-success-1", status: "completed" });
++  });
++
+   test("tails sub-agent actions instead of dropping latest entries at cap", async () => {
+     queryFactory.mockImplementation(() => buildQueryMock(buildTailScenarioEvents(205)));
+ 
+diff --git a/packages/server/src/server/agent/providers/claude/agent.subagent-interrupt.test.ts b/packages/server/src/server/agent/providers/claude/agent.subagent-interrupt.test.ts
+index d4fc0bcc0..4db7396ba 100644
+--- a/packages/server/src/server/agent/providers/claude/agent.subagent-interrupt.test.ts
++++ b/packages/server/src/server/agent/providers/claude/agent.subagent-interrupt.test.ts
+@@ -169,6 +169,64 @@ describe("subagent lifecycle across an interrupt", () => {
+     await session.close();
+   });
+ 
++  test("a legacy sidechain row is canceled with the turn that spawned it", async () => {
++    // A session whose CLI never announces tasks derives its subagent rows from sidechain frames.
++    // The interrupt terminalizes those rows too — a silent drop leaves one stuck "running"
++    // forever, and one stuck row pins the whole workspace "running".
++    const channel = buildOpenQueryMock();
++    queryFactory.mockImplementation(() => channel.query);
++    const session = await new ClaudeAgentClient({
++      logger: createTestLogger(),
++      queryFactory,
++      resolveBinary: async () => "/test/claude/bin",
++    }).createSession({ provider: "claude", cwd: process.cwd() });
++
++    const subagentEvents: ProviderSubagentInputEvent[] = [];
++    session.subscribe((event) => {
++      if (event.type === "provider_subagent") subagentEvents.push(event.event);
++    });
++
++    await session.startTurn("wait on a child");
++    channel.push({
++      type: "system",
++      subtype: "init",
++      session_id: "legacy-sidechain-session",
++      permissionMode: "default",
++    });
++    channel.push({
++      type: "stream_event",
++      parent_tool_use_id: null,
++      event: {
++        type: "content_block_start",
++        index: 0,
++        content_block: {
++          type: "tool_use",
++          id: "toolu_legacy_task",
++          name: "Task",
++          input: { subagent_type: "Explore", description: "Legacy child" },
++        },
++      },
++    });
++    channel.push({
++      type: "assistant",
++      parent_tool_use_id: "toolu_legacy_task",
++      message: { content: [{ type: "text", text: "working" }] },
++    });
++    await vi.waitFor(() =>
++      expect(subagentEvents).toContainEqual(
++        expect.objectContaining({ id: "toolu_legacy_task", status: "running" }),
++      ),
++    );
++
++    await session.interrupt();
++
++    await vi.waitFor(() =>
++      expect(statuses(subagentEvents, "toolu_legacy_task")).toEqual(["running", "canceled"]),
++    );
++
++    await session.close();
++  });
++
+   test("a foreground child is canceled with the turn that spawned it", async () => {
+     const { session, subagentEvents } = await startInterruptibleTurn();
+ 
+diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
+index 04fef2b1f..44cc10fab 100644
+--- a/packages/server/src/server/agent/providers/claude/agent.ts
++++ b/packages/server/src/server/agent/providers/claude/agent.ts
+@@ -4190,6 +4190,16 @@ class ClaudeAgentSession implements AgentSession {
+       ),
+     ).map((event): AgentStreamEvent => ({ type: "provider_subagent", provider: "claude", event }));
+     const routedId = canonicalSubagentId ?? parentToolUseId;
++    // A legacy sidechain exists only under a subagent tool call. Frames naming any other parent
++    // tool — an MCP call, Bash — belong to no child; deriving a row from them materializes a
++    // nameless "running" descriptor nothing will ever finish. Same recognition the task
++    // notification path uses.
++    if (
++      !canonicalSubagentId &&
++      !isClaudeSubagentToolName(this.toolUseCache.get(parentToolUseId)?.name)
++    ) {
++      return [];
++    }
+     return [...runtimeEvents, ...this.sidechainTracker.handleMessage(message, routedId)];
+   }
+ 
+@@ -4479,6 +4489,14 @@ class ClaudeAgentSession implements AgentSession {
+     const usage = this.convertUsage(message, message.modelUsage);
+     if (message.subtype === "success") {
+       events.push(...this.sidechainTracker.finishAll("completed"));
++      // The task protocol owns the descriptor, so finishAll no-ops once it is active — close the
++      // foreground children it declared itself, or a notification that never arrives leaves the
++      // row "running" forever.
++      for (const event of foldSubagentObservations(
++        this.taskProtocolSource.completeRunningForegroundTasks(),
++      )) {
++        events.push({ type: "provider_subagent", provider: "claude", event });
++      }
+       // Built-in slash commands (e.g. /voice, /usage, "Unknown command: …")
+       // run client-side in the Claude CLI with no model turn — output_tokens
+       // is 0 and the user-visible text is carried in `result`. Surface it only
+@@ -4763,7 +4781,12 @@ class ClaudeAgentSession implements AgentSession {
+       }
+     }
+     this.toolUseCache.clear();
+-    this.sidechainTracker.clear();
++    // A silent clear would strand every open legacy sidechain row at "running" — the store keeps
++    // the row, nothing ever terminalizes it, and one stuck row pins the workspace "running".
++    // Report the cancellation like the task protocol's cancel path does.
++    for (const event of this.sidechainTracker.finishAll("canceled")) {
++      this.pushEvent(event);
++    }
+     // The task protocol's routing table is session-scoped, so it is deliberately NOT reset here:
+     // the turn ended, the session did not. Wiping it would strand every task id the session still
+     // holds — a backgrounded child that settles after the interrupt would find no descriptor to
+diff --git a/packages/server/src/server/agent/providers/claude/subagents/live-source.test.ts b/packages/server/src/server/agent/providers/claude/subagents/live-source.test.ts
+index 1eca4cedc..e657ae0eb 100644
+--- a/packages/server/src/server/agent/providers/claude/subagents/live-source.test.ts
++++ b/packages/server/src/server/agent/providers/claude/subagents/live-source.test.ts
+@@ -511,6 +511,38 @@ describe("ClaudeTaskProtocolSource", () => {
+     expect(source.cancelRunningForegroundTasks()).toEqual([]);
+   });
+ 
++  it("completes the foreground subagents a successful turn was still running", () => {
++    const source = new ClaudeTaskProtocolSource();
++    source.observe(taskStarted());
++
++    expect(source.completeRunningForegroundTasks()).toEqual([
++      { kind: "status", id: "toolu_01DgLoPMW9", status: "completed" },
++    ]);
++    // Idempotent: the child is no longer running, so a second completion says nothing.
++    expect(source.completeRunningForegroundTasks()).toEqual([]);
++  });
++
++  it("leaves an already-settled subagent alone when the turn succeeds", () => {
++    const source = new ClaudeTaskProtocolSource();
++    source.observe(taskStarted());
++    source.observe(taskUpdated("completed"));
++
++    expect(source.completeRunningForegroundTasks()).toEqual([]);
++  });
++
++  it("does not complete a backgrounded subagent when the turn succeeds", () => {
++    const source = new ClaudeTaskProtocolSource();
++    source.observe(taskStarted());
++    source.observe({
++      type: "system",
++      subtype: "task_updated",
++      task_id: "a1730a6215e1f5cf6",
++      patch: { is_backgrounded: true },
++    } as unknown as SDKMessage);
++
++    expect(source.completeRunningForegroundTasks()).toEqual([]);
++  });
++
+   it("still routes a backgrounded subagent that settles after the interrupt", () => {
+     // The headline case: interrupt, continue, and the child that was told to outlive the turn
+     // reports completion later. Wiping the routing table on cancel drops this on the floor and
+diff --git a/packages/server/src/server/agent/providers/claude/subagents/live-source.ts b/packages/server/src/server/agent/providers/claude/subagents/live-source.ts
+index 1a4452036..3a0ec618c 100644
+--- a/packages/server/src/server/agent/providers/claude/subagents/live-source.ts
++++ b/packages/server/src/server/agent/providers/claude/subagents/live-source.ts
+@@ -307,6 +307,26 @@ export class ClaudeTaskProtocolSource {
+     return observations;
+   }
+ 
++  /**
++   * Terminalize the subagents a successfully finished turn was still running in the foreground.
++   *
++   * A turn that ends in success has no foreground child left working: anything still declared
++   * "running" finished alongside it, and Claude's own `task_notification` may never arrive.
++   * Backgrounded children are skipped — they were told to outlive the turn. Like the cancel path
++   * this reports statuses and leaves the routing intact, so a late notification stays free to
++   * correct the guess (the dedupe in `observeStatus` makes the redundant one a no-op).
++   */
++  completeRunningForegroundTasks(): SubagentObservation[] {
++    const observations: SubagentObservation[] = [];
++    for (const id of this.declaredIds) {
++      if (this.backgroundedIds.has(id)) continue;
++      if (this.lastStatusById.get(id) !== "running") continue;
++      this.lastStatusById.set(id, "completed");
++      observations.push({ kind: "status", id, status: "completed" });
++    }
++    return observations;
++  }
++
+   /** A lost Claude process terminates every task it owned, including backgrounded workflows. */
+   failRunningTasks(): SubagentObservation[] {
+     const observations: SubagentObservation[] = [];
