@@ -81,9 +81,6 @@ export function withDebug<Data>(
         >
           <Inner {...props} />
         </RenderBoundary>
-        <Text selectable style={{ color: colors.foregroundMuted, fontSize: 10, opacity: 0.6 }}>
-          semantic-markdown build {PLUGIN_BUILD}
-        </Text>
       </View>
     );
   };
