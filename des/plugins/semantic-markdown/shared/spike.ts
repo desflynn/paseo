@@ -1,6 +1,7 @@
 import MarkdownIt from "./markdown-it.js";
 import { z } from "zod";
 import { applyMarkdownExtensions } from "./extensions.ts";
+import { agentLinkTarget } from "./agent-link.ts";
 import { hasIncompleteSemanticPair } from "./source-syntax.ts";
 
 export const semanticKinds = [
@@ -450,8 +451,9 @@ export function parseSemanticMarkdown(parser: MarkdownIt, text: string): Markdow
 
 const PLUGIN_TOKEN = /^(semantic_|math_|footnote_|kbd)/;
 // The plugin claims exactly semantic markup, GFM tables, fenced code blocks
-// (Mermaid included), and blockquotes. Headings, lists, emphasis, links, and
-// inline code stay with Paseo's renderer.
+// (Mermaid included), and blockquotes. Headings, lists, emphasis, and inline
+// code stay with Paseo's renderer, as do links — except agent deep links
+// (shared/agent-link.ts), which only the plugin can route in-app.
 const CLAIMED_BLOCK = new Set(["table_open", "fence", "blockquote_open"]);
 
 function claimsMessage(tokens: MarkdownIt.Token[]): boolean {
@@ -459,6 +461,11 @@ function claimsMessage(tokens: MarkdownIt.Token[]): boolean {
     (token) =>
       PLUGIN_TOKEN.test(token.type) ||
       CLAIMED_BLOCK.has(token.type) ||
+      // Agent deep links must render through the plugin: Paseo's own renderer
+      // opens unknown schemes in the external browser, which dead-ends on a
+      // blank tab for agent: and paseo:// URLs.
+      (token.type === "link_open" &&
+        agentLinkTarget(token.attrGet("href") ?? "", "") !== null) ||
       claimsMessage(token.children ?? []),
   );
 }

@@ -10,7 +10,16 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Linking, Pressable, Text, View, type TextStyle, type ViewStyle } from "react-native";
+import {
+  Alert,
+  Linking,
+  Pressable,
+  Text,
+  View,
+  type TextStyle,
+  type ViewStyle,
+} from "react-native";
+import { agentLinkTarget } from "../shared/agent-link.ts";
 import {
   findPaneHandler,
   localFilePath,
@@ -802,6 +811,43 @@ async function openWorkspaceFile(serverId: string, agentId: string, href: string
   }
 }
 
+// The agent route resolves the agent itself (prepareAgentRoute + fetchAgent in the app's
+// [agentId].tsx), so no workspace lookup is needed before navigating.
+function agentRoute(serverId: string, agentId: string): string {
+  return `/h/${encodeURIComponent(serverId)}/agent/${encodeURIComponent(agentId)}`;
+}
+
+function openAgentTab(serverId: string, agentId: string) {
+  const route = agentRoute(serverId, agentId);
+  if (isWeb) {
+    // Desktop: re-enter the app through its own agent route with a full document
+    // navigation. createWindow cold-starts agent windows at exactly this path
+    // (paseo://app + /h/<server>/agent/<id>), and the route resolves the agent and
+    // redirects into its tab. A history pushState cannot be used: expo-router's
+    // history fork derives the current position from window.history.state.id, so a
+    // foreign entry with null state reads as index 0 and the synthetic popstate is
+    // handled as a backward jump — resetRoot to an unreconcilable state, blank pane.
+    window.location.assign(route);
+    return;
+  }
+  void Linking.openURL(`paseo://${route}`).catch((error) =>
+    console.warn("[semantic-markdown] agent link failed", route, error),
+  );
+}
+
+// The client talks to one daemon at a time, so a full-form link naming any other server
+// cannot be followed here. No plugin toast exists in the SDK; RN Alert (already a
+// dependency) covers native, window.alert covers the desktop renderer.
+function alertNotConnected(serverId: string) {
+  const message = `Not connected to server ${serverId}.`;
+  console.warn("[semantic-markdown] agent link:", message);
+  if (isWeb) {
+    window.alert(message);
+  } else {
+    Alert.alert("Paseo", message);
+  }
+}
+
 // --- component -----------------------------------------------------------------
 
 export function SemanticMarkdown({
@@ -846,6 +892,15 @@ export function SemanticMarkdown({
   }, []);
   const handleLinkPress = useCallback(
     (href: string) => {
+      const agent = agentLinkTarget(href, host.id);
+      if (agent) {
+        if (agent.kind === "other-server") {
+          alertNotConnected(agent.serverId);
+        } else {
+          void openAgentTab(agent.serverId, agent.agentId);
+        }
+        return false;
+      }
       const path = localFilePath(href.trim());
       if (!path) return true;
       linkClicks += 1;

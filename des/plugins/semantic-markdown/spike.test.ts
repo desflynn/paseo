@@ -89,6 +89,28 @@ test("ownership leaves prose, headings, lists, emphasis, links, and inline code 
   }
 });
 
+test("ownership claims agent deep links so the plugin can route them in-app", () => {
+  const claimed = [
+    "[Open Pi Fixer Guy](agent:d11bb301-7d39-4239-9dd7-c3bc3799faf5)",
+    "[Open Pi Fixer Guy](paseo://h/srv_abc123/agent/d11bb301-7d39-4239-9dd7-c3bc3799faf5)",
+    "Plain prose, then [a link](agent:d11bb301-7d39-4239-9dd7-c3bc3799faf5) mid-sentence.",
+  ];
+  for (const text of claimed) {
+    assert.notEqual(parseSpike(text), undefined, `parseSpike should claim: ${text}`);
+  }
+});
+
+test("ownership still leaves non-agent links native", () => {
+  const native = [
+    "[docs](https://example.com)",
+    "[agent-ish](agent:not-a-uuid)",
+    "[workspace file](file:///repo/README.md)",
+  ];
+  for (const text of native) {
+    assert.equal(parseSpike(text), undefined, `parseSpike should not claim: ${text}`);
+  }
+});
+
 test("plain semantic lines preserve nested Markdown", () => {
   const text = "{done} **Desktop build complete.** Version 0.9.2.";
   assert.deepEqual(parseSpike(text), { text });

@@ -3,6 +3,25 @@
 Started 2026-09-27 ~23:35 IST. Base: junk/semantic-markdown-plugin (vendored Paseo 0.9.2 renderer).
 Proven facts: see memory `plugin-mobile-hermes` and des/plugins/render-probe (commit 83536ecb0).
 
+## 2026-10-07 — agent-link click dead-ended in the external browser (NARROWBODY glm)
+
+Recon: desktop click on `[Open Pi Fixer Guy](agent:uuid)` opened a blank external tab. The
+plugin's press chain is sound — vendor renderer.tsx SharedMarkdownLink honours `=== false`,
+web renders a Pressable (no anchor, no browser default), markdown-it 10 leaves `agent:` hrefs
+untouched, and main.lowered.js already contained agentLinkTarget. Real cause: the click never
+reached the plugin. index.client.tsx's timeline transformer only claims messages when
+parseSpike fires (semantic markup, tables, fences, blockquotes — claimsMessage in
+shared/spike.ts). A bare agent-link message fell through to Paseo's own renderer, whose
+handleMarkdownLinkPress (packages/app/src/components/message.tsx:1525) hands unknown schemes
+to fileLinkActions → openExternalUrl → blank external tab.
+
+Fix: claimsMessage (shared/spike.ts:457) now also claims a message whose `link_open` href
+parses as an agent deep link (agentLinkTarget), so only those messages switch to the plugin
+renderer; https and file links stay native. Two focused parseSpike tests added in
+spike.test.ts (claim short/full/mid-sentence; non-agent links stay unclaimed). 134/134
+tests green, typecheck clean, main.lowered.js rebuilt 08:40 IST. Not committed, no plugin
+reload — parent re-tests by clicking.
+
 ## Done
 
 - Copied source; prebundle imports → real packages (markdown-it, @getpaseo/highlight, htmlparser2, react-native-markdown-display).
@@ -109,3 +128,16 @@ BROKEN:
 - GREEN: shared/spike.ts — `semanticStatusRule` block rule (whole-line `{status}…{/status}`, findUnescaped closer, `hasUnescapedSemanticTag` nest guard → literal; tokens semantic_status_open/close + inline children so inline markdown rides the existing path); ESCAPED_SEMANTIC_CODE extended with `/?status`; registered before "paragraph". shared/source-syntax.ts — SEMANTIC_STATUS added to hasSemanticSourceSyntax (debug/fallback detection only). client/semantic-markdown.tsx — SemanticStatus strip (Icon name="Info" from @getpaseo/plugin/client/react-native, lucide outline, size 16, #93c5fd; rgba(147,197,253,0.1) flat fill; radius theme.borderRadius.md; marginBottom spacing[1]; padding H spacing[3] / V 10; row flex-start gap spacing[2]; icon container h20 centered; text foreground / theme.fontSize.base / lineHeight 20 via the text rule's owner lookup, selectable through the existing selection spans). No new dependency. DESIGN.md grammar entry added.
 - Gate: suites 122/122 pass (npm test, includes build); typecheck clean; build regenerated client/main.lowered.js 5612 KB (only build artifact — it is the client bundle).
 - Untouched outside des/plugins/semantic-markdown/. No commit, no reload — parent reloads the plugin and screenshots.
+
+## Agent deep links (2026-10-07, NARROWBODY glm)
+
+- Brief: `[label](agent:<agentId>)` and `[label](paseo://h/<serverId>/agent/<agentId>)` open that agent's tab. UUID ids only; other-server full form shows a not-connected message. TDD pure function in shared/; wire handleLinkPress. No commit, no reload — parent does that.
+- Recon: handleLinkPress (client/semantic-markdown.tsx) only files today; pane handler exposes openFileInWorkspace only (no agent nav) → reuse the app deep-link path. Route /h/[serverId]/agent/[agentId] (packages/app/src/app/h/[serverId]/agent/[agentId].tsx) resolves the agent itself (prepareAgentRoute + fetchAgent), so no workspace lookup needed. markdown-it 10.0.0 BAD_PROTO_RE blocks only vbscript|javascript|file|data → agent:/paseo: pass validateLink untouched; no change needed. Toast: none in @getpaseo/plugin SDK; RN Alert exists in react-native + react-native-web (both already deps); web uses window.alert.
+- RED: shared/agent-link.test.ts (9 tests). Run: whole file fails on missing ./agent-link.ts import (0 pass / 1 fail file-level). Correct RED.
+- GREEN: shared/agent-link.ts — agentLinkTarget(href, currentHostId): short `agent:<uuid>` → {kind:"agent", serverId: currentHostId}; full `paseo://h/<srv>/agent/<uuid>` → agent on same server else {kind:"other-server"}; trailing slash tolerated; href trimmed, UUID hex case-insensitive; non-UUID, other paseo routes, https/mailto, file links → null (fall through). node --test shared/agent-link.test.ts: 9/9 pass.
+- Wiring: client/semantic-markdown.tsx — handleLinkPress tries agentLinkTarget first; kind "agent" → openAgentTab (desktop isWeb: pushState + popstate with /h/<srv>/agent/<id>, same pattern as openWorkspaceFile; native: Linking.openURL("paseo://" + route)); kind "other-server" → alertNotConnected (no SDK toast exists; window.alert on web, RN Alert on native — both already deps, none added); returns false either way. Everything after the agent branch unchanged (file links, default true). validateLink untouched — markdown-it 10.0.0 BAD_PROTO_RE (vbscript|javascript|file|data) already lets agent:/paseo: through.
+- Gate: npm test 123/123 pass 0 fail, exit 0 (/tmp/sm-agent-gate.txt); typecheck exit 0 (/tmp/sm-agent-tc.txt); client/main.lowered.js rebuilt 5.75 MB via build.mjs (only build artifact). DESIGN.md Extensions +1 bullet. Files touched: shared/agent-link.ts (new), shared/agent-link.test.ts (new), client/semantic-markdown.tsx, DESIGN.md, WORKLOG.md. Nothing outside des/plugins/semantic-markdown/. No commit, no reload, no daemon touch — parent reloads, screenshots, commits.
+- Desktop blank-pane fix (2026-10-06): click on agent link reached openAgentTab but web branch used pushState(null)+popstate → main pane blank, no tab. Cause: expo-router 6.0.23 fork (build/fork/createMemoryHistory.js + fork/useLinking.js) derives history.index from window.history.state.id — a foreign pushState(null) entry has no id, so index reads 0; the synthetic popstate is then treated as a backward jump (index < previousIndex), not the fork's hash-push case, and resetRoot is called with a state the router cannot reconcile → blank. openWorkspaceFile uses the same pattern for file links — works-or-not unproven on desktop; watch item, out of scope.
+- Fix: openAgentTab web branch now does window.location.assign("/h/<srv>/agent/<id>") — full document navigation that re-enters the app through its own agent route, the same path shape createWindow cold-starts agent windows with (paseo://app + route, main.ts loadURL). Route ([agentId].tsx) resolves via prepareAgentRoute/fetchAgent then navigateToAgent → tab opens. Same-window reload is the cost; cannot blank. Rejected: window.paseoDesktop.opener.openUrl (ipcMain pas:opener:openUrl gates HTTP(S) only, "Only HTTP(S) URLs can open externally"); renderer cannot send the open-agent IPC (contextIsolation; preload exposes receive-only events); PluginTimelineItemProps carries no navigation surface (only panels/command-center get usePluginHostNavigation); RN-web Linking.openURL = window.open(_blank) → second window.
+- Native branch unchanged: Linking.openURL("paseo://" + route).
+- Gate: npm test 134/134 pass 0 fail; typecheck clean; client/main.lowered.js rebuilt with location.assign (grep 1 hit). Files touched: client/semantic-markdown.tsx, WORKLOG.md only. No commit, no reload, no daemon touch — parent reloads and click-tests.

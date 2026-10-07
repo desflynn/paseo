@@ -25,6 +25,9 @@ The plugin owns parsing and rendering on desktop and mobile.
 - Inline and block math.
 - Footnotes.
 - Keyboard keys.
+- Agent deep links: `[label](agent:<agentId>)` and `[label](paseo://h/<serverId>/agent/<agentId>)`
+  open that agent's tab. Full UUID ids only — anything else falls through to the default link
+  path. A full form naming another server shows a not-connected alert instead of navigating.
 
 Kinds are `ask`, `done`, `deferred`, `warning`, `danger`, `info`, and `muted`.
 
