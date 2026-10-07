@@ -1,10 +1,11 @@
 import { getPaseoClient, type PluginTimelineItemProps } from "@getpaseo/plugin/client";
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { copyText, Icon } from "@getpaseo/plugin/client/react-native";
 import {
   Component,
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -20,6 +21,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { agentLinkTarget } from "../shared/agent-link.ts";
+import { formatMessageTimestamp } from "../shared/message-time.ts";
 import {
   findPaneHandler,
   localFilePath,
@@ -33,7 +35,7 @@ import { isWeb } from "./vendor/constants/platform.ts";
 import type { ASTNode, RenderRules } from "react-native-markdown-display";
 import { setMessageFootnotes } from "../shared/extensions.ts";
 import { texToUnicode } from "../shared/tex-unicode.ts";
-import { useStoredSettings } from "./app-settings.ts";
+import { DEFAULT_CONTENT_FONT_SIZE, useStoredSettings } from "./app-settings.ts";
 import {
   createSharedMarkdownRules,
   MarkdownInheritedText,
@@ -134,6 +136,7 @@ interface CalloutStateProps {
   color: string;
   surfaceTint: string;
   border: string;
+  theme: Theme;
   children: ReactNode;
 }
 
@@ -144,6 +147,7 @@ function SemanticCallout({
   color,
   surfaceTint,
   border,
+  theme,
   children,
 }: CalloutStateProps) {
   const [open, setOpen] = useState(fold !== "collapsed");
@@ -170,6 +174,7 @@ function SemanticCallout({
       >
         {header}
         <View style={calloutStyles.body}>{children}</View>
+        <CalloutFooter theme={theme} />
       </View>
     );
   }
@@ -190,6 +195,7 @@ function SemanticCallout({
         {header}
       </Pressable>
       {open ? <View style={calloutStyles.body}>{children}</View> : null}
+      <CalloutFooter theme={theme} />
     </View>
   );
 }
@@ -213,6 +219,107 @@ const calloutStyles = {
   headerPressable: {},
   body: { paddingHorizontal: 10, paddingBottom: 8 },
 } satisfies Record<string, ViewStyle>;
+
+// --- callout card footer -------------------------------------------------------
+
+// The message's timestamp and full markdown, for the footer row at the bottom of
+// every callout card. SemanticMarkdown provides them; the renderer rules sit
+// several calls deep, so a context carries them instead of threading props
+// (same shape as AudioOpenFileContext in semantic-audio.tsx).
+interface CalloutMessage {
+  timestamp: Date;
+  text: string;
+}
+const CalloutMessageContext = createContext<CalloutMessage | null>(null);
+
+// The app's user-message footer geometry (message.tsx: trailingRow + timestampText,
+// and TurnCopyButton with the user-message copyButton override): gap/marginTop
+// spacing[2], copy button padding spacing[1] with a -spacing[1] right edge, 24px row.
+// The metadata text 13 (STREAM_METADATA_FONT_SIZE) and icon 14 (ICON_SIZE.sm) sit
+// against the app's default content size, so they scale by
+// contentFontSize / default (16 native, 15 web — DEFAULT_CONTENT_FONT_SIZE) to
+// track the chat text setting. Colours come from the theme, never hard-coded.
+const CALLOUT_TIME_PX = 13;
+const CALLOUT_COPY_ICON_PX = 14;
+
+function scaleToContentSize(appPx: number, contentSize: number): number {
+  return Math.round((appPx * contentSize) / DEFAULT_CONTENT_FONT_SIZE);
+}
+
+const calloutFooterStyles = {
+  row: {
+    alignSelf: "flex-end" as const,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    height: 24,
+    gap: 8, // theme.spacing[2]
+    marginTop: 8, // theme.spacing[2]
+  },
+  copyButton: {
+    alignSelf: "center" as const,
+    padding: 4, // theme.spacing[1]
+    paddingTop: 4, // theme.spacing[1]
+    marginTop: 0,
+    marginRight: -4, // -theme.spacing[1]
+  },
+} satisfies Record<string, ViewStyle>;
+
+// Mirrors the app's TurnCopyButton: copy → check for 1.5s, muted icon that
+// lightens on hover (web only; hovered stays false on native).
+function CalloutFooter({ theme }: { theme: Theme }) {
+  const message = useContext(CalloutMessageContext);
+  const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  const handleCopy = useCallback(async () => {
+    if (!message?.text) return;
+    try {
+      await copyText(message.text);
+      setCopied(true);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => {
+        setCopied(false);
+        timeoutRef.current = null;
+      }, 1500);
+    } catch (error) {
+      console.warn("[semantic-markdown] callout copy failed", error);
+    }
+  }, [message]);
+
+  if (!message) return null;
+  return (
+    <View style={calloutFooterStyles.row}>
+      <Text
+        style={{
+          color: theme.colors.foregroundMuted,
+          fontSize: scaleToContentSize(CALLOUT_TIME_PX, theme.fontSize.content),
+        }}
+      >
+        {formatMessageTimestamp(message.timestamp)}
+      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={copied ? "Copied" : "Copy message"}
+        onPress={handleCopy}
+        style={calloutFooterStyles.copyButton}
+      >
+        {({ hovered }) => (
+          <Icon
+            name={copied ? "Check" : "Copy"}
+            size={scaleToContentSize(CALLOUT_COPY_ICON_PX, theme.fontSize.content)}
+            color={hovered ? theme.colors.foreground : theme.colors.foregroundMuted}
+          />
+        )}
+      </Pressable>
+    </View>
+  );
+}
 
 // --- semantic status strip -----------------------------------------------------
 
@@ -397,6 +504,7 @@ function createSemanticMarkdownRules(ctx: { theme: Theme; dark: boolean }): Rend
           color={palette[kind]}
           surfaceTint={hexTint(palette[kind], surfaceTint)}
           border={ctx.theme.colors.border}
+          theme={ctx.theme}
         >
           {children}
         </SemanticCallout>
@@ -861,6 +969,7 @@ function alertNotConnected(serverId: string) {
 
 export function SemanticMarkdown({
   item,
+  timestamp,
   theme: pluginTheme,
   host,
   agentId,
@@ -895,6 +1004,10 @@ export function SemanticMarkdown({
     ].join();
   }, [markdownParser, streamingMarkdownParser, item.data.text, prepared.cardDefinitions]);
   const rules = useMemo(() => createRendererRules(theme, dark), [theme, dark]);
+  const messageContext = useMemo(
+    () => ({ timestamp, text: item.data.text }),
+    [timestamp, item.data.text],
+  );
   const paneSearchRef = useRef<PaneHandlerSearch>({ handler: null, walked: 0 });
   const rememberPaneHandler = useCallback((search: PaneHandlerSearch) => {
     paneSearchRef.current = search;
@@ -944,20 +1057,22 @@ export function SemanticMarkdown({
   return (
     <LinkPressContext.Provider value={handleLinkPress}>
       <AudioOpenFileContext.Provider value={openLocalFile}>
-        <View>
-          <PaneHandlerProbe onFound={rememberPaneHandler} />
-          {blocks.map((block, index) => (
-            <MarkdownRenderer
-              key={`block:${index}:${footnoteKey}`}
-              text={block}
-              theme={theme}
-              dark={dark}
-              rules={rules}
-              markdownit={index === blocks.length - 1 ? streamingMarkdownParser : markdownParser}
-              onLinkPress={handleLinkPress}
-            />
-          ))}
-        </View>
+        <CalloutMessageContext.Provider value={messageContext}>
+          <View>
+            <PaneHandlerProbe onFound={rememberPaneHandler} />
+            {blocks.map((block, index) => (
+              <MarkdownRenderer
+                key={`block:${index}:${footnoteKey}`}
+                text={block}
+                theme={theme}
+                dark={dark}
+                rules={rules}
+                markdownit={index === blocks.length - 1 ? streamingMarkdownParser : markdownParser}
+                onLinkPress={handleLinkPress}
+              />
+            ))}
+          </View>
+        </CalloutMessageContext.Provider>
       </AudioOpenFileContext.Provider>
     </LinkPressContext.Provider>
   );
