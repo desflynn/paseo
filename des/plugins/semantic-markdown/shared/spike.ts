@@ -500,17 +500,11 @@ function claimsMessage(tokens: MarkdownIt.Token[]): boolean {
 
 const detector = createSemanticMarkdownParser();
 
-export function parseSpike(
-  text: string,
-  streaming = false,
-  options?: { claimComplete?: boolean },
-): SpikeData | undefined {
-  const claimed =
-    claimsMessage(parseSemanticMarkdown(detector, text)) ||
-    (streaming && hasIncompleteSemanticPair(text));
-  // A finished message with no plugin syntax is still claimed when asked, so the
-  // renderer can append turn-end chrome (shared/stopped-at.ts) under it.
-  return claimed || (options?.claimComplete === true && !streaming) ? { text } : undefined;
+export function parseSpike(text: string, streaming = false): SpikeData | undefined {
+  return claimsMessage(parseSemanticMarkdown(detector, text)) ||
+    (streaming && hasIncompleteSemanticPair(text))
+    ? { text }
+    : undefined;
 }
 
 /** Debug until stable: why the detector did or did not claim a message. */

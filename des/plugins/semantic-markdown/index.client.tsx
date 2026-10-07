@@ -89,9 +89,7 @@ function contributeMain(client: PluginClientContext, mainApi: Main) {
       // Debug until stable: a parser failure leaves the message on Paseo's renderer.
       let data;
       try {
-        // claimComplete: a plain finished message is claimed too, so the
-        // renderer can show the stopped-at line under the last one.
-        data = parseSpike(item.text, phase === "streaming", { claimComplete: true });
+        data = parseSpike(item.text, phase === "streaming");
       } catch (error) {
         console.warn("[semantic-markdown] parse failed", error);
         if (!PLUGIN_DEBUG) return;
