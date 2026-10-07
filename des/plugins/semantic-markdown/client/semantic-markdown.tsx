@@ -136,7 +136,6 @@ interface CalloutStateProps {
   color: string;
   surfaceTint: string;
   border: string;
-  theme: Theme;
   children: ReactNode;
 }
 
@@ -147,7 +146,6 @@ function SemanticCallout({
   color,
   surfaceTint,
   border,
-  theme,
   children,
 }: CalloutStateProps) {
   const [open, setOpen] = useState(fold !== "collapsed");
@@ -174,7 +172,6 @@ function SemanticCallout({
       >
         {header}
         <View style={calloutStyles.body}>{children}</View>
-        <CalloutFooter theme={theme} />
       </View>
     );
   }
@@ -195,7 +192,6 @@ function SemanticCallout({
         {header}
       </Pressable>
       {open ? <View style={calloutStyles.body}>{children}</View> : null}
-      <CalloutFooter theme={theme} />
     </View>
   );
 }
@@ -220,17 +216,16 @@ const calloutStyles = {
   body: { paddingHorizontal: 10, paddingBottom: 8 },
 } satisfies Record<string, ViewStyle>;
 
-// --- callout card footer -------------------------------------------------------
+// --- semantic message footer --------------------------------------------------
 
-// The message's timestamp and full markdown, for the footer row at the bottom of
-// every callout card. SemanticMarkdown provides them; the renderer rules sit
-// several calls deep, so a context carries them instead of threading props
-// (same shape as AudioOpenFileContext in semantic-audio.tsx).
-interface CalloutMessage {
+// SemanticMarkdown provides one timestamp and the full markdown for its footer.
+// The renderer rules sit several calls deep, so context carries both instead of
+// threading props (same shape as AudioOpenFileContext in semantic-audio.tsx).
+interface SemanticMessage {
   timestamp: Date;
   text: string;
 }
-const CalloutMessageContext = createContext<CalloutMessage | null>(null);
+const SemanticMessageContext = createContext<SemanticMessage | null>(null);
 
 // The app's user-message footer geometry (message.tsx: trailingRow + timestampText,
 // and TurnCopyButton with the user-message copyButton override): gap/marginTop
@@ -239,14 +234,14 @@ const CalloutMessageContext = createContext<CalloutMessage | null>(null);
 // against the app's default content size, so they scale by
 // contentFontSize / default (16 native, 15 web — DEFAULT_CONTENT_FONT_SIZE) to
 // track the chat text setting. Colours come from the theme, never hard-coded.
-const CALLOUT_TIME_PX = 13;
-const CALLOUT_COPY_ICON_PX = 14;
+const MESSAGE_TIME_PX = 13;
+const MESSAGE_COPY_ICON_PX = 14;
 
 function scaleToContentSize(appPx: number, contentSize: number): number {
   return Math.round((appPx * contentSize) / DEFAULT_CONTENT_FONT_SIZE);
 }
 
-const calloutFooterStyles = {
+const messageFooterStyles = {
   row: {
     alignSelf: "flex-end" as const,
     flexDirection: "row" as const,
@@ -266,8 +261,8 @@ const calloutFooterStyles = {
 
 // Mirrors the app's TurnCopyButton: copy → check for 1.5s, muted icon that
 // lightens on hover (web only; hovered stays false on native).
-function CalloutFooter({ theme }: { theme: Theme }) {
-  const message = useContext(CalloutMessageContext);
+function MessageFooter({ theme }: { theme: Theme }) {
+  const message = useContext(SemanticMessageContext);
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -294,11 +289,11 @@ function CalloutFooter({ theme }: { theme: Theme }) {
 
   if (!message) return null;
   return (
-    <View style={calloutFooterStyles.row}>
+    <View style={messageFooterStyles.row}>
       <Text
         style={{
           color: theme.colors.foregroundMuted,
-          fontSize: scaleToContentSize(CALLOUT_TIME_PX, theme.fontSize.content),
+          fontSize: scaleToContentSize(MESSAGE_TIME_PX, theme.fontSize.content),
         }}
       >
         {formatMessageTimestamp(message.timestamp)}
@@ -307,12 +302,12 @@ function CalloutFooter({ theme }: { theme: Theme }) {
         accessibilityRole="button"
         accessibilityLabel={copied ? "Copied" : "Copy message"}
         onPress={handleCopy}
-        style={calloutFooterStyles.copyButton}
+        style={messageFooterStyles.copyButton}
       >
         {({ hovered }) => (
           <Icon
             name={copied ? "Check" : "Copy"}
-            size={scaleToContentSize(CALLOUT_COPY_ICON_PX, theme.fontSize.content)}
+            size={scaleToContentSize(MESSAGE_COPY_ICON_PX, theme.fontSize.content)}
             color={hovered ? theme.colors.foreground : theme.colors.foregroundMuted}
           />
         )}
@@ -504,7 +499,6 @@ function createSemanticMarkdownRules(ctx: { theme: Theme; dark: boolean }): Rend
           color={palette[kind]}
           surfaceTint={hexTint(palette[kind], surfaceTint)}
           border={ctx.theme.colors.border}
-          theme={ctx.theme}
         >
           {children}
         </SemanticCallout>
@@ -1057,7 +1051,7 @@ export function SemanticMarkdown({
   return (
     <LinkPressContext.Provider value={handleLinkPress}>
       <AudioOpenFileContext.Provider value={openLocalFile}>
-        <CalloutMessageContext.Provider value={messageContext}>
+        <SemanticMessageContext.Provider value={messageContext}>
           <View>
             <PaneHandlerProbe onFound={rememberPaneHandler} />
             {blocks.map((block, index) => (
@@ -1071,8 +1065,9 @@ export function SemanticMarkdown({
                 onLinkPress={handleLinkPress}
               />
             ))}
+            <MessageFooter theme={theme} />
           </View>
-        </CalloutMessageContext.Provider>
+        </SemanticMessageContext.Provider>
       </AudioOpenFileContext.Provider>
     </LinkPressContext.Provider>
   );
