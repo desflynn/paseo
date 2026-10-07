@@ -192,3 +192,230 @@ The app runs on iOS, Android, web (browser), and web (Electron desktop). Code is
 ## Debugging
 
 Find the complete daemon logs and traces in the $PASEO_HOME/daemon.log
+
+# context-mode — MANDATORY routing rules
+
+You have context-mode MCP tools available. These rules are NOT optional — they protect your context window from flooding. A single unrouted command can dump 56 KB into context and waste the entire session.
+
+## BLOCKED commands — do NOT attempt these
+
+### curl / wget — BLOCKED
+
+Any Bash command containing `curl` or `wget` is intercepted and replaced with an error message. Do NOT retry.
+Instead use:
+
+- `ctx_fetch_and_index(url, source)` to fetch and index web pages
+- `ctx_execute(language: "javascript", code: "const r = await fetch(...)")` to run HTTP calls in sandbox
+
+### Inline HTTP — BLOCKED
+
+Any Bash command containing `fetch('http`, `requests.get(`, `requests.post(`, `http.get(`, or `http.request(` is intercepted and replaced with an error message. Do NOT retry with Bash.
+Instead use:
+
+- `ctx_execute(language, code)` to run HTTP calls in sandbox — only stdout enters context
+
+### WebFetch — BLOCKED
+
+WebFetch calls are denied entirely. The URL is extracted and you are told to use `ctx_fetch_and_index` instead.
+Instead use:
+
+- `ctx_fetch_and_index(url, source)` then `ctx_search(queries)` to query the indexed content
+
+## REDIRECTED tools — use sandbox equivalents
+
+### Bash (>20 lines output)
+
+Bash is ONLY for: `git`, `mkdir`, `rm`, `mv`, `cd`, `ls`, `npm install`, `pip install`, and other short-output commands.
+For everything else, use:
+
+- `ctx_batch_execute(commands, queries)` — run multiple commands + search in ONE call
+- `ctx_execute(language: "shell", code: "...")` — run in sandbox, only stdout enters context
+
+### Read (for analysis)
+
+If you are reading a file to **Edit** it → Read is correct (Edit needs content in context).
+If you are reading to **analyze, explore, or summarize** → use `ctx_execute_file(path, language, code)` instead. Only your printed summary enters context. The raw file content stays in the sandbox.
+
+### Grep (large results)
+
+Grep results can flood context. Use `ctx_execute(language: "shell", code: "grep ...")` to run searches in sandbox. Only your printed summary enters context.
+
+## Tool selection hierarchy
+
+1. **GATHER**: `ctx_batch_execute(commands, queries)` — Primary tool. Runs all commands, auto-indexes output, returns search results. ONE call replaces 30+ individual calls.
+2. **FOLLOW-UP**: `ctx_search(queries: ["q1", "q2", ...])` — Query indexed content. Pass ALL questions as array in ONE call.
+3. **PROCESSING**: `ctx_execute(language, code)` | `ctx_execute_file(path, language, code)` — Sandbox execution. Only stdout enters context.
+4. **WEB**: `ctx_fetch_and_index(url, source)` then `ctx_search(queries)` — Fetch, chunk, index, query. Raw HTML never enters context.
+5. **INDEX**: `ctx_index(content, source)` — Store content in FTS5 knowledge base for later search.
+
+## Subagent routing
+
+When spawning subagents (Agent/Task tool), the routing block is automatically injected into their prompt. Bash-type subagents are upgraded to general-purpose so they have access to MCP tools. You do NOT need to manually instruct subagents about context-mode.
+
+## Output constraints
+
+- Keep responses under 500 words.
+- Write artifacts (code, configs, PRDs) to FILES — never return them as inline text. Return only: file path + 1-line description.
+- When indexing content, use descriptive source labels so others can `ctx_search(source: "label")` later.
+
+## ctx commands
+
+| Command       | Action                                                                                |
+| ------------- | ------------------------------------------------------------------------------------- |
+| `ctx stats`   | Call the `ctx_stats` MCP tool and display the full output verbatim                    |
+| `ctx doctor`  | Call the `ctx_doctor` MCP tool, run the returned shell command, display as checklist  |
+| `ctx upgrade` | Call the `ctx_upgrade` MCP tool, run the returned shell command, display as checklist |
+
+<!-- BEGIN paseo-bridge — managed by dci-harness; keep synced with canonical template -->
+
+# Activation gate
+
+- Use Paseo bridge only when both are true:
+  - `PASEO_AGENT_ID` is set.
+  - Native `mcp__paseo__*` tools are present.
+- If either is false, use the harness native subagent tool.
+- DCI MCP alone does not activate Paseo.
+- When active, use `PASEO_AGENT_ID` as `parentAgentId`.
+
+# How to launch a subagent
+
+- When active, prefer `mcp__dci__launch_paseo_subagent`:
+
+```json
+{
+  "provider": "codex/gpt-5.5",
+  "prompt": "Review the current diff and return blocking findings only.",
+  "parentAgentId": "<your PASEO_AGENT_ID env var>",
+  "mode": "full-access",
+  "thinkingOptionId": "high",
+  "foreground": true
+}
+```
+
+- Use `mcp__paseo__create_agent` only when intentionally standalone or DCI launch is unavailable; explain why.
+- Always pass explicit `parentAgentId`, `mode`, `thinkingOptionId`, and normally the same `cwd`.
+- Do not rely on the DCI MCP server environment to infer `parentAgentId`.
+- Use unattended mode mapping below for cross-provider children.
+- Use explicit reasoning IDs when available: `none`, `low`, `medium`, `high`, `xhigh`, `max`.
+
+# How to talk to a subagent after launch
+
+- Use returned `agentId` with `mcp__paseo__send_agent_prompt`, `mcp__dci__paseo_wait_for_agent`, and `mcp__paseo__get_agent_status`.
+- Archive completed child agents with `mcp__paseo__archive_agent`.
+- Never archive the root agent.
+
+# How to launch a long-running backgrounded subagent of a different provider
+
+- Use `foreground: false` when the child should continue independently:
+
+```json
+{
+  "provider": "codex/gpt-5.5",
+  "prompt": "Run an implementation pass for Phase 2. Do not commit.",
+  "parentAgentId": "<your PASEO_AGENT_ID env var>",
+  "mode": "full-access",
+  "thinkingOptionId": "high",
+  "foreground": false,
+  "title": "Phase 2 implementation"
+}
+```
+
+- Persist the returned `agentId`; later collect with wait/status.
+
+# Per-provider unattended modes
+
+| Provider | Mode              |
+| -------- | ----------------- |
+| claude   | bypassPermissions |
+| codex    | full-access       |
+| opencode | full-access       |
+| pi       | default           |
+
+# Cwd-parity rule
+
+- Pass explicit `cwd`; normally use the parent's cwd.
+- Different cwd makes the Paseo app detail panel less reliable.
+
+# OpenCode auto-accept gotcha
+
+- OpenCode `build` does not auto-accept tools.
+- For unattended OpenCode, pass `mode: "full-access"`; it forces build mode plus `auto_accept=true`.
+- Use bare `build` only with `modeForce: true`; it may block on permissions.
+
+# Image inspection
+
+- Prefer native image tools: Claude/Pi `Read`, Codex `view_image`.
+- Fallback only if needed: Claude `mcp__dci__inspect_image`; Pi/OpenCode `dci_inspect_image`.
+- Pi: connect dci via `mcp` first.
+- Always pass absolute paths.
+- Do not use Pi image-preview extensions.
+
+# When NOT inside Paseo
+
+- If activation gate fails, use native subagent tools.
+- Paseo bridge hooks/plugins must no-op.
+<!-- END paseo-bridge -->
+
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
+
+## Beads Issue Tracker
+
+This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+
+### Quick Reference
+
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>         # Complete work
+```
+
+### Rules
+
+- **Beads = persistent work**: epics, sub-tasks, standalone bugs/tasks. Survives sessions. If a bug is uncovered but won't be fixed now → file a bead.
+- **TaskCreate/TodoWrite = ephemeral in-session checklists**: the implementation steps for the bead you're currently working, or a small sub-task that lives entirely in one session.
+- **MANDATORY**: For any non-trivial work (>1 step), TaskCreate the steps before starting. The bead is the _what_; the task list is the _how, right now_. Skipping this is only OK for true one-shot changes.
+- Never use TaskCreate as a _substitute_ for beads (don't track durable work in disappearing checklists). Never use markdown TODO files for either.
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Run `bd prime` for detailed command reference and session close protocol
+
+## Session Completion
+
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+**MANDATORY WORKFLOW:**
+
+1. **File issues for remaining work** - Create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **PUSH TO REMOTE** - This is MANDATORY:
+   ```bash
+   git pull --rebase
+   bd dolt push
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** - Clear stashes, prune remote branches
+6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
+
+**CRITICAL RULES:**
+
+- Work is NOT complete until `git push` succeeds
+- NEVER stop before pushing - that leaves work stranded locally
+- NEVER say "ready to push when you are" - YOU must push
+- If push fails, resolve and retry until it succeeds
+<!-- END BEADS INTEGRATION -->
+
+<!-- flight-plan commands (managed by /fp-init) -->
+
+## Flight-plan command routing
+
+**For `/fp-*` commands, load the repo version in `.agents/commands/`.**
+Never read the global `~/.agents/commands/` path: the jail refuses
+out-of-repo reads before the binding, and only the repo copy is installed.
+`fp-init` is the sole exception: it is global by design.
+
+**Commit all of `.flight/` and `.agents/`, including symlinks, with normal chore work like `.dci/` and `.beads/`.**
+Do not add flight-plan install paths to `.gitignore`.
