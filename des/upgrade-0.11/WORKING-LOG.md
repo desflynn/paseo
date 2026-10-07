@@ -18,7 +18,7 @@
 - Preserved 0.10.3-df is pushed to origin at d3bfe1c3e; local and remote heads match.
 - Upgrade branch is based on upstream v0.11.0 (22488d450), with asset seed commit 5bc62547e. That commit carries all tracked des/, .agents/, .flight/, .claude/, .codex/ and .pi/ assets from preserved 0.10.3-df, leaving upstream core code unchanged.
 - The seed was prepared using a temporary Git index, not a worktree. Plugin tree hashes were checked before and after the branch switch and match the preserved branch exactly.
-- All eight required overlays are carried, plus the existing Pi MCP friendly-label candidate. Dependency installation, declarations, static/plugin/browser gates and root desktop build passed. Artifacts are prepared, not installed. Final commit/push remains pending.
+- All eight required overlays are carried, plus the existing Pi MCP friendly-label candidate. Dependency installation, declarations, static/plugin/browser gates and root desktop build passed. Artifacts are prepared, not installed. Delivery commit 09bde0ff7 is pushed to origin/0.11.0-df and verified 0/0; tracked tree is clean.
 - The mistakenly created .dev/worktrees/0.11.0-df checkout was removed using the exact command approved by Des. The branch was kept.
 - No stash, reset, clean, or source discard has been performed.
 - Bead: paseo-98w, claimed.
@@ -114,8 +114,13 @@ Exclusion preserves these files on disk; nothing is deleted. Branch-exit audit m
 - Live non-interference: installed /Applications/Paseo.app remains 0.10.3. Supervisor PID 1385 and listener/daemon child PID 1398 both started October 5. Earlier summary conflated supervisor and listener; corrected by ps/lsof, not assumed. No install or daemon restart.
 - Python plistlib failed against the host XML library; used native PlistBuddy instead. No host dependency repair.
 
+## Delivery
+
+- Upgrade commit 09bde0ff7 pushed to origin/0.11.0-df; local/remote divergence 0/0 and tracked tree clean. Exactly 47 reviewed regular paths staged, no foreign files. Strong secret scan found zero hits. Format/lint/typecheck commit hooks all passed.
+- Bead paseo-98w closed in the local durable tracker. Its auto-export could not stage ignored .beads; no force-add or ignore change. This note records delivery after the source commit.
+
 ## Pending
 
-- Last pushed upgrade HEAD 7e289ff2f. Commit/push verified upgrade by explicit paths after final scope/secret/format checks; close paseo-98w when delivery is recorded.
+- Prepared app/artifacts remain local and uninstalled. Des owns any later installation decision. Global Persona Guy owns the dispatched Large4 NARROWBODY doctrine update; completion has not been independently confirmed.
 - Do not install or restart the production daemon. npm's 149 vulnerabilities require review before later installation/release; no automatic security/dependency sweep.
 - October 1 owner UAT did not happen. Footer copy/check and MP3 desktop/phone checks remain unverified; no owner/device UAT is claimed.
