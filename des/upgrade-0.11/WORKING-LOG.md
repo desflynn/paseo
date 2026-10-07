@@ -10,12 +10,15 @@
 - Des explicitly requires all live and spike plugin trees/assets to carry into 0.11.0-df; protect the daemon-served source paths during the branch switch.
 - October 1 owner UAT did not happen. The pre-UAT report is not owner UAT.
 - Never install an app or restart the production daemon during this preparation.
+- HOLD: Des deferred Paseo work to the host Pi upgrade. Do not carry further overlays or start a Paseo build until Pi Fixer Guy sends the explicit all-clear. Des asked to stop the helper and yeet current progress.
 
 ## State
 
-- Existing checkout: /Users/des/dev/paseo, branch 0.10.3-df.
-- Original fork-synced head: 0598fe903. Explicit git push confirmed everything up to date.
-- Upgrade branch 0.11.0-df exists at upstream v0.11.0 (22488d450).
+- Existing checkout: /Users/des/dev/paseo, now on branch 0.11.0-df.
+- Preserved 0.10.3-df is pushed to origin at d3bfe1c3e; local and remote heads match.
+- Upgrade branch is based on upstream v0.11.0 (22488d450), with asset seed commit 5bc62547e. That commit carries all tracked des/, .agents/, .flight/, .claude/, .codex/ and .pi/ assets from preserved 0.10.3-df, leaving upstream core code unchanged.
+- The seed was prepared using a temporary Git index, not a worktree. Plugin tree hashes were checked before and after the branch switch and match the preserved branch exactly.
+- No 0.11 overlay implementation, dependency installation, or build has started. No new build process is running.
 - The mistakenly created .dev/worktrees/0.11.0-df checkout was removed using the exact command approved by Des. The branch was kept.
 - No stash, reset, clean, or source discard has been performed.
 - Bead: paseo-98w, claimed.
@@ -56,6 +59,12 @@ Exclusion preserves these files on disk; nothing is deleted. Branch-exit audit m
 - Original 0.10.3-df branch pushed/verified against fork.
 - Dirty-tree inventory completed: six tracked changes and 99 untracked entries before this log.
 - .agents/ and .flight/ symlinks checked: no missing targets.
+- 0.10.3-df preservation commits and branch-exit audit pushed through d3bfe1c3e.
+- Main checkout switched safely to 0.11.0-df after seeding all plugin and harness assets. Tracked tree was clean before the pause journal update.
+- FP-TESTER-3 recorded that October 1 UAT did not happen in /Users/des/dev/paseo-semantic-renderer-plugin/.flight/working-logs/FP-TESTER-3.md. It found no active flight lead; no flight-engine or live-plugin state changed.
+- The aborted launch created Pi overlay helper 71100df6-c621-4faf-bfc5-a3129fe7ae2c. Cancelled, confirmed idle, and archived on Des's instruction. It only read patches/worklogs; no tracked or untracked source edits were left.
+- Build hold acknowledged through Paseo to Pi Fixer Guy d11bb301-7d39-4239-9dd7-c3bc3799faf5. It recorded the hold and will send the all-clear after Pi verification.
+- This agent id is 0ba29851-ef0e-4847-b014-99167dfb78f1 for an approved same-ID reload during the Pi installation.
 
 ## Branch-exit audit
 
@@ -67,8 +76,9 @@ Exclusion preserves these files on disk; nothing is deleted. Branch-exit audit m
 
 ## Pending
 
-- Push preservation commits and this audit to the fork; verify remote head and repeat dangling-path check before switching.
-- Harvest the no-UAT clarification receipt from current FP-TESTER-3 (63858a9d-2c5a-43a5-850d-7a64e723edca); message delivered and pickup verified. Asked it to record the correction in the flight-owned log and relay to the current lead. No UAT/live activation authorized.
-- Prepare all des/plugins trees/assets on 0.11.0-df before switching, then safely switch the main checkout without deleting live daemon-served plugin sources or losing remaining local-only files.
-- Carry overlays in UPDATE-CHECK.md order, evaluate preserved candidates, run upgrade gates, and build desktop artifact.
+- Commit/push this pause journal and the asset seed to origin/0.11.0-df. This is preparatory preservation, not a verified 0.11 desktop build.
+- Wait for Pi Fixer Guy's explicit all-clear. No polling wake or implementation/build work during the hold.
+- After all-clear, reread this log and UPDATE-CHECK.md, then carry the eight required overlays in README order; retire ACP context-meter because upstream 48329facc is included.
+- Assess the preserved tool-results-spike host/browser tests and local root guidance on 0.10.3-df for migration into the upstream core tree. Assets are carried, but these core-file candidates are not yet ported.
+- Run npm dependency installation/allowScripts review, focused overlay and plugin compatibility tests, cross-package declarations/static gates, and root desktop build. Do not install or restart the production daemon.
 - Footer copy/check interaction and MP3 desktop/phone checks remain unverified; do not claim owner/device UAT.
