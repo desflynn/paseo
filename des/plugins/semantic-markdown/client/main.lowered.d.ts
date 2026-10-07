@@ -14,7 +14,11 @@ declare const PLUGIN_BUILD: string;
 declare function describeError(error: unknown): string;
 declare function loadStoredSettings(): void;
 declare function diagnoseParse(text: string): string;
-declare function parseSpike(text: string, streaming?: boolean): SpikeData | null;
+declare function parseSpike(
+  text: string,
+  streaming?: boolean,
+  options?: { claimComplete?: boolean },
+): SpikeData | null;
 declare const spikeDataSchema: ZodType<SpikeData>;
 
 /** Set on globalThis by main.lowered.js when it runs (see client/main.ts). */

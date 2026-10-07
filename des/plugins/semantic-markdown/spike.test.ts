@@ -620,3 +620,9 @@ test("desktop can load the native WebView adapter without native commands", asyn
     vm.runInNewContext(result.outputFiles[0].text, { exports: {}, module: {} }),
   );
 });
+
+test("claimComplete claims a plain finished message but not a streaming one", () => {
+  const text = "**Just** a normal answer.";
+  assert.deepEqual(parseSpike(text, false, { claimComplete: true }), { text });
+  assert.equal(parseSpike(text, true, { claimComplete: true }), undefined);
+});
