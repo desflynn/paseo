@@ -78,10 +78,20 @@
 
 ## Delivery
 
-- Commit and push only ten owned label/test files plus this working log; leave foreign guidance, local backups and helper journal untouched.
-- Stable main and DF scaffold already pushed to fork. Remaining commit carries Pi label change as a separate local patch above the ten replayed commits.
+- Pi label patch and initial upgrade log committed/pushed as cde2d2d75. Foreign guidance, local backups and helper journal left untouched.
+- Stable main and DF scaffold pushed to fork. Pi label change is a separate local patch above the ten replayed commits.
 
-## Pending owner decision
+## Installation approval and rollback
 
-- Ask Des before installation or any live daemon restart. No permission granted yet.
-- Installed app and live daemon have not been changed. Next step after approval: check installed version, prepare rollback bundle, then provide bounded installation commands. Do not infer approval from preparation.
+- Des answered A to Q2: installation and live daemon restart approved.
+- Installed target /Applications/Paseo.app reports 0.10.1; prepared app reports 0.10.3 and ASAR hash still matches verified artifact.
+- Production daemon status checked with PASEO_HOME=/Users/des/.paseo; selected home /Users/des/.paseo, PID 70389 at inspection. Credentials/config not changed and raw status withheld.
+- Created new ignored rollback copy /Users/des/dev/paseo/.dev/upgrade-rollback-0.10.3/Paseo-0.10.1.app. Original and rollback ASAR SHA256 both 262e149bc2580833dc6fd48d17c747babb7bb2f0bac5d7d762d8730293e1255f.
+- CLI supports paseo daemon stop. Use explicit production PASEO_HOME, not checkout-local npm CLI.
+- Provide exact commands for Des's own Terminal: quit app, stop production daemon, move old bundle to /Applications/Paseo-0.10.1-retired-20261003.app (guard against existing path), ditto prepared bundle into now-empty /Applications/Paseo.app, relaunch.
+- Owner executes from independent Terminal so stopping daemon cannot kill the installation command. No rm or overwrite of old bundle required; old bundle and verified rollback copy remain available.
+
+## Pending
+
+- Installed app and live daemon have not yet been changed by this agent. Await owner execution of the exact commands.
+- After Des confirms completion, verify installed 0.10.3 version/ASAR fingerprint and production daemon health. Real-device Pi label UAT remains to be checked after relaunch.
