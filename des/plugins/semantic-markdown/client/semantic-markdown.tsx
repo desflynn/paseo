@@ -60,7 +60,6 @@ import {
   type SpikeData,
 } from "../shared/spike.ts";
 import { AudioOpenFileContext, SemanticAudio } from "./semantic-audio.tsx";
-import { useStoppedAt } from "./stopped-at.tsx";
 
 // Style objects/arrays and the positional block key are deliberate render-time
 // allocations (same rationale as the app's react-perf override): they read the live
@@ -865,12 +864,10 @@ export function SemanticMarkdown({
   theme: pluginTheme,
   host,
   agentId,
-  timestamp,
 }: PluginTimelineItemProps<SpikeData>) {
   const settings = useStoredSettings();
   const theme = useMemo(() => themeFromPlugin(pluginTheme, settings), [pluginTheme, settings]);
   const dark = useMemo(() => isDarkSurface(pluginTheme.colors.surface0), [pluginTheme]);
-  const stoppedAt = useStoppedAt(host.id, agentId, timestamp);
 
   const markdownParser = useMemo(() => applySemanticRules(createAssistantMarkdownParser()), []);
   // The last block always uses the streaming parser: without a phase signal
@@ -960,17 +957,6 @@ export function SemanticMarkdown({
               onLinkPress={handleLinkPress}
             />
           ))}
-          {stoppedAt ? (
-            <Text
-              style={{
-                color: theme.colors.foregroundMuted,
-                fontSize: 12,
-                marginTop: theme.spacing[1.5],
-              }}
-            >
-              {stoppedAt}
-            </Text>
-          ) : null}
         </View>
       </AudioOpenFileContext.Provider>
     </LinkPressContext.Provider>
