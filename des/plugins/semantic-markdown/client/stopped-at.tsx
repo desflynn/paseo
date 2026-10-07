@@ -18,6 +18,22 @@ interface StoreEntry extends AgentHaltState {
   /** One refetch per halt: rearmed when the agent runs again. */
   haltHandled: boolean;
   listeners: Set<() => void>;
+  poll: ReturnType<typeof setInterval> | null;
+}
+
+// ponytail: subscribe() only relays agent updates the app's client already
+// receives, so the running→halted flip can be missed. While the agent runs and a
+// message is mounted, re-read its status every POLL_MS; stops once it halts.
+const POLL_MS = 4000;
+
+function startPoll(entry: StoreEntry, handle: AgentHandle): void {
+  if (entry.poll) return;
+  entry.poll = setInterval(() => void refreshStatus(entry, handle), POLL_MS);
+}
+
+function stopPoll(entry: StoreEntry): void {
+  if (entry.poll) clearInterval(entry.poll);
+  entry.poll = null;
 }
 
 // One shared store per agentId: every mounted message of an agent subscribes to
@@ -39,6 +55,8 @@ function notify(entry: StoreEntry): void {
 
 function applyStatus(entry: StoreEntry, handle: AgentHandle, status: string | null): void {
   const halted = status !== null && status !== "running";
+  if (halted) stopPoll(entry);
+  else startPoll(entry, handle);
   if (!halted) {
     if (entry.halted || entry.haltHandled) {
       entry.halted = false;
@@ -105,6 +123,7 @@ function acquire(hostId: string, agentId: string): StoreEntry {
       lastItemAt: null,
       haltHandled: false,
       listeners: new Set(),
+      poll: null,
     };
     stores.set(agentId, entry);
   }
@@ -120,6 +139,7 @@ function release(agentId: string, listener: () => void): void {
   entry.refs -= 1;
   if (entry.refs > 0) return;
   entry.unsubscribeStatus?.();
+  stopPoll(entry);
   stores.delete(agentId);
 }
 
