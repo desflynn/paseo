@@ -14,7 +14,6 @@ git apply --3way des/overlays/unsigned-macos-build.patch   # always
 git apply --3way des/overlays/acp-context-meter.patch      # only while the base lacks upstream 48329facc
 git apply --3way des/overlays/mine-label.patch
 git apply --3way des/overlays/pi-compaction-hold.patch
-git apply --3way des/overlays/turn-footer-stop-time.patch
 npm install                                                # then fix allowScripts, see overlay 1
 npm run build:desktop                                      # from the repo root
 ```
@@ -159,20 +158,3 @@ Last verified: written against `0.10.3-df` at 2419f0e5b (2026-10-05).
   `completed` (`completeRunningForegroundTasks`, backgrounded rows untouched); legacy rows are made
   only under subagent tools (`isClaudeSubagentToolName`), so MCP tool calls no longer show as
   nameless "Claude subagent" rows.
-
-## 10. Stop time in the turn footer
-
-- Patch: `turn-footer-stop-time.patch`. Source commit: `213f00cb0`. Upstream: not filed.
-- Paseo's turn footer showed "Worked for X" and hid the end time behind hover (web) or a tap
-  (native); it showed the time alone only on turns with no visible start. Des wants Paseo's own
-  footer with both, always visible.
-- What it must achieve: `AssistantTurnFooter` (`packages/app/src/components/message.tsx`) renders
-  one always-visible label from `getAssistantTurnFooterLabel`
-  (`components/assistant-turn-footer-label.ts`): "Worked for 1m 3s · Stopped at 16:04", with the
-  weekday within the last week ("16:04 Saturday") and the full date before that ("16:04 on Sunday
-  27/09/2026"); without a visible start, "Stopped at …" alone. The hover/tap swap is gone, and
-  the e2e spec finds the footer by text, not as a button.
-- A plugin cannot do this: timeline transforms replace a message, and a turn with no app-rendered
-  assistant message loses the footer.
-
-Last verified: applies cleanly to `v0.10.3` (2026-10-07). Not yet built or installed.

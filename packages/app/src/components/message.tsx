@@ -73,7 +73,6 @@ import { useRevealedText } from "@/hooks/use-revealed-text";
 import { colorMarkdownLinkChildren } from "@/components/markdown/link-children";
 import { createAssistantMarkdownParser } from "@/utils/assistant-markdown-parser";
 import { formatDuration, formatMessageTimestamp } from "@/utils/time";
-import { getAssistantTurnFooterLabel } from "./assistant-turn-footer-label";
 import { writeMarkdownToRichClipboard } from "@/utils/rich-clipboard";
 import { getDefaultMarkdownClipboardEnvironment } from "@/utils/rich-clipboard-default-environment";
 import { setAssistantMarkdownBlockHeight } from "@/utils/assistant-message-height-estimate";
@@ -598,15 +597,29 @@ const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
     marginTop: 0,
     marginLeft: -theme.spacing[1],
   },
-  label: {
+  labelWrapper: {
+    position: "relative",
+  },
+  labelSizer: {
+    color: theme.colors.foregroundMuted,
+    fontSize: STREAM_METADATA_FONT_SIZE,
+    opacity: 0,
+  },
+  labelOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
     color: theme.colors.foregroundMuted,
     fontSize: STREAM_METADATA_FONT_SIZE,
   },
 }));
 
+const TIMESTAMP_REVEAL_MS = 3000;
+
 /**
- * Footer rendered next to the copy button at the end of a halted assistant
- * turn: how long it worked and when it stopped, always visible.
+ * Footer rendered next to the copy button at the end of an assistant turn.
+ * Shows the turn duration and swaps to the end timestamp when both are known.
+ * A turn without a visible start shows its end timestamp directly.
  */
 export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   getContent,
@@ -614,10 +627,48 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   durationMs,
   onFork,
 }: AssistantTurnFooterProps) {
-  const label = useMemo(
-    () => getAssistantTurnFooterLabel({ completedAt, durationMs }),
-    [completedAt, durationMs],
+  const [hovered, setHovered] = useState(false);
+  const [pressedReveal, setPressedReveal] = useState(false);
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (revealTimerRef.current) {
+        clearTimeout(revealTimerRef.current);
+        revealTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const durationLabel = useMemo(
+    () =>
+      durationMs !== undefined && durationMs !== null
+        ? `Worked for ${formatDuration(durationMs)}`
+        : "",
+    [durationMs],
   );
+  const timestampLabel = useMemo(
+    () => (completedAt ? formatMessageTimestamp(completedAt) : ""),
+    [completedAt],
+  );
+
+  const primaryLabel = durationLabel || timestampLabel;
+  const canSwap = Boolean(durationLabel && timestampLabel);
+  const showTimestamp = canSwap && (isWeb ? hovered : pressedReveal);
+
+  const handleHoverIn = useCallback(() => setHovered(true), []);
+  const handleHoverOut = useCallback(() => setHovered(false), []);
+  const handlePress = useCallback(() => {
+    if (isWeb || !canSwap) return;
+    if (revealTimerRef.current) {
+      clearTimeout(revealTimerRef.current);
+    }
+    setPressedReveal((prev) => !prev);
+    revealTimerRef.current = setTimeout(() => {
+      setPressedReveal(false);
+      revealTimerRef.current = null;
+    }, TIMESTAMP_REVEAL_MS);
+  }, [canSwap]);
   const handleFork = useCallback(
     (target: AssistantForkTarget) => {
       return onFork?.(target);
@@ -633,7 +684,26 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
         containerStyle={assistantTurnFooterStylesheet.copyButton}
       />
       {canFork ? <AssistantForkMenu onFork={handleFork} /> : null}
-      {label ? <Text style={assistantTurnFooterStylesheet.label}>{label}</Text> : null}
+      {primaryLabel ? (
+        <Pressable
+          onPress={handlePress}
+          onHoverIn={handleHoverIn}
+          onHoverOut={handleHoverOut}
+          accessibilityRole={canSwap ? "button" : undefined}
+          accessibilityLabel={canSwap ? `${durationLabel}, ended ${timestampLabel}` : primaryLabel}
+        >
+          <View style={assistantTurnFooterStylesheet.labelWrapper}>
+            {/* Sizer reserves space for whichever label is longer so the
+                container width is stable across hover transitions. */}
+            <Text style={assistantTurnFooterStylesheet.labelSizer} aria-hidden>
+              {primaryLabel.length >= timestampLabel.length ? primaryLabel : timestampLabel}
+            </Text>
+            <Text style={assistantTurnFooterStylesheet.labelOverlay}>
+              {showTimestamp ? timestampLabel : primaryLabel}
+            </Text>
+          </View>
+        </Pressable>
+      ) : null}
     </View>
   );
 });
