@@ -3,6 +3,8 @@ import { z } from "zod";
 import { applyMarkdownExtensions } from "./extensions.ts";
 import { agentLinkTarget } from "./agent-link.ts";
 import { hasIncompleteSemanticPair } from "./source-syntax.ts";
+import { localFilePath } from "./file-link.ts";
+import { audioMimeFromPath } from "./read-audio.ts";
 
 export const semanticKinds = [
   "ask",
@@ -179,6 +181,32 @@ function semanticStatusRule(
   inline.children = [];
 
   state.push("semantic_status_close", "p", -1).block = true;
+  state.line = startLine + 1;
+  return true;
+}
+
+// Audio pill: a line whose ONLY content is one link to a local audio file
+// (shared/read-audio.ts allowlist) renders the plugin's inline player. An
+// audio link anywhere else in text stays a normal link.
+const AUDIO_LINE = /^\[([^\]]*)\]\(([^()\s]+)\)[ \t]*$/;
+
+function semanticAudioRule(
+  state: MarkdownIt.StateBlock,
+  startLine: number,
+  _endLine: number,
+  silent: boolean,
+) {
+  const match = AUDIO_LINE.exec(lineText(state, startLine).trim());
+  if (!match) return false;
+  const path = localFilePath(match[2]);
+  if (!path || !audioMimeFromPath(path)) return false;
+  if (silent) return true;
+
+  const open = state.push("semantic_audio_open", "p", 1);
+  open.block = true;
+  open.map = [startLine, startLine + 1];
+  open.meta = { path, label: match[1] };
+  state.push("semantic_audio_close", "p", -1).block = true;
   state.line = startLine + 1;
   return true;
 }
@@ -417,6 +445,7 @@ export function applySemanticRules(parser: MarkdownIt, streaming = false): Markd
   parser.block.ruler.before("paragraph", "semantic_status", semanticStatusRule, {
     alt: ["paragraph"],
   });
+  parser.block.ruler.before("paragraph", "semantic_audio", semanticAudioRule);
   parser.block.ruler.before("paragraph", "semantic_text", semanticTextRule);
   parser.inline.ruler.before("emphasis", "semantic_highlight", semanticHighlightRule);
   parser.inline.ruler.before("emphasis", "semantic_pair", semanticPairRule);
@@ -464,8 +493,7 @@ function claimsMessage(tokens: MarkdownIt.Token[]): boolean {
       // Agent deep links must render through the plugin: Paseo's own renderer
       // opens unknown schemes in the external browser, which dead-ends on a
       // blank tab for agent: and paseo:// URLs.
-      (token.type === "link_open" &&
-        agentLinkTarget(token.attrGet("href") ?? "", "") !== null) ||
+      (token.type === "link_open" && agentLinkTarget(token.attrGet("href") ?? "", "") !== null) ||
       claimsMessage(token.children ?? []),
   );
 }

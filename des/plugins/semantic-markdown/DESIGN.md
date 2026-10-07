@@ -28,6 +28,10 @@ The plugin owns parsing and rendering on desktop and mobile.
 - Agent deep links: `[label](agent:<agentId>)` and `[label](paseo://h/<serverId>/agent/<agentId>)`
   open that agent's tab. Full UUID ids only — anything else falls through to the default link
   path. A full form naming another server shows a not-connected alert instead of navigating.
+- Audio pill: `[label](/abs/path.mp3|m4a|wav|ogg)` as the ONLY content of a line renders an
+  inline player (desktop `<audio>` on a blob: URL, phone a WebView audio bar); the read-audio
+  RPC fetches the bytes on first tap (16 MiB cap). An audio link anywhere else in text stays a
+  normal link.
 
 Kinds are `ask`, `done`, `deferred`, `warning`, `danger`, `info`, and `muted`.
 

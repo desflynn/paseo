@@ -10,6 +10,7 @@ export interface NativeWebViewProps {
   messagingModuleName: string;
   scrollEnabled: boolean;
   bounces: boolean;
+  mediaPlaybackRequiresUserAction?: boolean;
   injectedJavaScript?: string;
   onMessage?: (event: { nativeEvent: { data: string } }) => void;
   onLoadingStart?: (event: { nativeEvent: { url: string } }) => void;

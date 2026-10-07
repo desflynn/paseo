@@ -59,6 +59,7 @@ import {
   type SemanticKind,
   type SpikeData,
 } from "../shared/spike.ts";
+import { AudioOpenFileContext, SemanticAudio } from "./semantic-audio.tsx";
 
 // Style objects/arrays and the positional block key are deliberate render-time
 // allocations (same rationale as the app's react-perf override): they read the live
@@ -376,6 +377,14 @@ function createSemanticMarkdownRules(ctx: { theme: Theme; dark: boolean }): Rend
       <SemanticStatus key={node.key} theme={ctx.theme}>
         {children}
       </SemanticStatus>
+    ),
+    semantic_audio: (node: ASTNode) => (
+      <SemanticAudio
+        key={node.key}
+        path={String(node.sourceMeta?.path ?? "")}
+        label={String(node.sourceMeta?.label ?? "")}
+        theme={ctx.theme}
+      />
     ),
     semantic_callout: (node: ASTNode, children: ReactNode[], _p: ASTNode[], _s: MarkdownStyles) => {
       const kind = (node.sourceMeta?.kind as SemanticKind) ?? "info";
@@ -890,6 +899,29 @@ export function SemanticMarkdown({
   const rememberPaneHandler = useCallback((search: PaneHandlerSearch) => {
     paneSearchRef.current = search;
   }, []);
+  // One open path for file-link taps and audio-pill fallbacks alike: the pane
+  // handler when present, the workspace deep link otherwise.
+  const openLocalFile = useCallback(
+    (path: string) => {
+      linkClicks += 1;
+      const click = linkClicks;
+      const pane = paneSearchRef.current.handler;
+      if (pane) {
+        try {
+          pane.openFileInWorkspace({ location: { path }, disposition: "preferred" });
+          return;
+        } catch (error) {
+          console.warn("[semantic-markdown] pane handler failed", error);
+        }
+      }
+      console.warn(
+        `[semantic-markdown] no pane handler (walked ${paneSearchRef.current.walked}), deep link`,
+      );
+      void openWorkspaceFile(host.id, agentId, path, click);
+    },
+    [host.id, agentId],
+  );
+
   const handleLinkPress = useCallback(
     (href: string) => {
       const agent = agentLinkTarget(href, host.id);
@@ -903,42 +935,30 @@ export function SemanticMarkdown({
       }
       const path = localFilePath(href.trim());
       if (!path) return true;
-      linkClicks += 1;
-      const click = linkClicks;
-      const pane = paneSearchRef.current.handler;
-      if (pane) {
-        try {
-          pane.openFileInWorkspace({ location: { path }, disposition: "preferred" });
-          return false;
-        } catch (error) {
-          console.warn("[semantic-markdown] pane handler failed", error);
-        }
-      }
-      console.warn(
-        `[semantic-markdown] no pane handler (walked ${paneSearchRef.current.walked}), deep link`,
-      );
-      void openWorkspaceFile(host.id, agentId, href, click);
+      openLocalFile(path);
       return false;
     },
-    [host.id, agentId],
+    [host.id, openLocalFile],
   );
 
   return (
     <LinkPressContext.Provider value={handleLinkPress}>
-      <View>
-        <PaneHandlerProbe onFound={rememberPaneHandler} />
-        {blocks.map((block, index) => (
-          <MarkdownRenderer
-            key={`block:${index}:${footnoteKey}`}
-            text={block}
-            theme={theme}
-            dark={dark}
-            rules={rules}
-            markdownit={index === blocks.length - 1 ? streamingMarkdownParser : markdownParser}
-            onLinkPress={handleLinkPress}
-          />
-        ))}
-      </View>
+      <AudioOpenFileContext.Provider value={openLocalFile}>
+        <View>
+          <PaneHandlerProbe onFound={rememberPaneHandler} />
+          {blocks.map((block, index) => (
+            <MarkdownRenderer
+              key={`block:${index}:${footnoteKey}`}
+              text={block}
+              theme={theme}
+              dark={dark}
+              rules={rules}
+              markdownit={index === blocks.length - 1 ? streamingMarkdownParser : markdownParser}
+              onLinkPress={handleLinkPress}
+            />
+          ))}
+        </View>
+      </AudioOpenFileContext.Provider>
     </LinkPressContext.Provider>
   );
 }

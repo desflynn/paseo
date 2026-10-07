@@ -261,3 +261,46 @@ test("numberFootnotes handles empty input", () => {
   numberFootnotes([]);
   assert.ok(true);
 });
+
+// --- audio pill links -------------------------------------------------------
+
+test("a whole-line local mp3 link becomes a semantic_audio token", () => {
+  const tokens = tokenTypes("[Final report](/tmp/report.mp3)");
+  const token = find(tokens, "semantic_audio_open");
+  assert.equal(token?.meta?.path, "/tmp/report.mp3");
+  assert.equal(token?.meta?.label, "Final report");
+});
+
+test("m4a/wav/ogg and file:// audio links become semantic_audio tokens too", () => {
+  for (const [href, path] of [
+    ["/tmp/a.m4a", "/tmp/a.m4a"],
+    ["/tmp/b.wav", "/tmp/b.wav"],
+    ["/tmp/c.ogg", "/tmp/c.ogg"],
+    ["file:///tmp/d.mp3", "/tmp/d.mp3"],
+  ] as const) {
+    const tokens = tokenTypes(`[clip](${href})`);
+    assert.equal(find(tokens, "semantic_audio_open")?.meta?.path, path);
+  }
+});
+
+test("a mid-sentence audio link stays a normal link", () => {
+  const tokens = tokenTypes("See [Final report](/tmp/report.mp3) for details.");
+  assert.equal(find(tokens, "semantic_audio_open"), undefined);
+  assert.ok(tokens.some((token) => token.type === "link_open"));
+});
+
+test("an https mp3 link gets no audio token", () => {
+  const tokens = tokenTypes("[Final report](https://example.com/report.mp3)");
+  assert.equal(find(tokens, "semantic_audio_open"), undefined);
+});
+
+test("a non-audio path gets no audio token", () => {
+  const tokens = tokenTypes("[Notes](/tmp/notes.txt)");
+  assert.equal(find(tokens, "semantic_audio_open"), undefined);
+});
+
+test("audio-only messages are claimed by the transformer", () => {
+  assert.deepEqual(parseSpike("[Final report](/tmp/report.mp3)"), {
+    text: "[Final report](/tmp/report.mp3)",
+  });
+});
