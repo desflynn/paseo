@@ -22,7 +22,12 @@ import { Platform, Pressable, Text, View } from "react-native";
 import { NativeWebView } from "./vendor/components/markdown/fence/mermaid/native-webview.tsx";
 import { isWeb } from "./vendor/constants/platform.ts";
 import type { Theme } from "./vendor/styles/theme.ts";
-import { readAudioRpc, type ReadAudioResult } from "../shared/read-audio.ts";
+import {
+  audioDurationRpc,
+  formatDuration,
+  readAudioRpc,
+  type ReadAudioResult,
+} from "../shared/read-audio.ts";
 
 // Same fill/radius language as the {status} strip in semantic-markdown.tsx;
 // kept local because importing that file from here would be a cycle.
@@ -57,6 +62,25 @@ function loadAudio(
   return cached;
 }
 
+// Durations are tiny and fetched on mount, once per path, so the pill shows
+// the length before anyone presses play.
+const durationCache = new Map<string, Promise<number | null>>();
+
+function loadDuration(
+  path: string,
+  invoke: (input: { path: string }) => Promise<{ seconds: number | null }>,
+): Promise<number | null> {
+  let cached = durationCache.get(path);
+  if (!cached) {
+    cached = invoke({ path }).then(
+      (value) => value.seconds,
+      () => null,
+    );
+    durationCache.set(path, cached);
+  }
+  return cached;
+}
+
 function audioPageSource(mime: string, base64: string): { html: string; baseUrl?: string } {
   // Minimal dark page; nothing loads remotely — the source is inline data.
   // Android needs a baseUrl to load html strings (mermaid native-host.tsx:68).
@@ -80,6 +104,18 @@ export function SemanticAudio({
   theme: Theme;
 }) {
   const invoke = useRpc(readAudioRpc);
+  const invokeDuration = useRpc(audioDurationRpc);
+  const [duration, setDuration] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    void loadDuration(path, invokeDuration).then((seconds) => {
+      if (live) setDuration(seconds);
+      return seconds;
+    });
+    return () => {
+      live = false;
+    };
+  }, [path, invokeDuration]);
   const openFile = useContext(AudioOpenFileContext);
   const [result, setResult] = useState<ReadAudioResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -135,6 +171,7 @@ export function SemanticAudio({
         }}
       >
         <Icon name="Play" size={16} color={PILL_ICON} />
+        <Icon name="AudioLines" size={16} color={PILL_ICON} />
         <Text
           numberOfLines={1}
           style={{
@@ -146,6 +183,20 @@ export function SemanticAudio({
         >
           {title}
         </Text>
+        {duration !== null ? (
+          <Text
+            style={{
+              color: theme.colors.foreground,
+              fontSize: theme.fontSize.base,
+              lineHeight: 20,
+              opacity: 0.66,
+              marginLeft: "auto",
+              fontVariant: ["tabular-nums"],
+            }}
+          >
+            {formatDuration(duration)}
+          </Text>
+        ) : null}
       </Pressable>
       {failed && result && !result.ok ? (
         <Text

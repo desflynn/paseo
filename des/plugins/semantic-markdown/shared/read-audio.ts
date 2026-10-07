@@ -30,3 +30,19 @@ export const readAudioRpc = defineRpc({
 });
 
 export type ReadAudioResult = z.infer<typeof readAudioRpc.output>;
+
+// Length for the pill, shown before play without moving the file's bytes.
+export const audioDurationRpc = defineRpc({
+  name: "audio-duration",
+  input: z.object({ path: z.string() }),
+  output: z.object({ seconds: z.number().nullable() }),
+});
+
+/** 314.2 → "5:14", 3725 → "1:02:05". */
+export function formatDuration(seconds: number): string {
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
