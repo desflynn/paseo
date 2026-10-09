@@ -26,9 +26,11 @@ Precedence: CLAUDE_CODE_AUTO_COMPACT_WINDOW > user settings modelSettings[model 
 - Installed Electron embedded-ASAR-integrity fuse is disabled (fuse 4 = ASCII 48), so the backend-only archive does not require a plist/renderer/binary change.
 - Latest read-only daemon status: version 0.11.1, supervisor PID 3985. Packaged worker loads /Applications/Paseo.app/Contents/Resources/app.asar.
 
+- Reviewed source, carry patch, evidence and manual rollout/rollback instructions committed and pushed as 0166bcdd5 on origin/0.11.1-df; divergence 0/0. Commit hooks passed. Strong secret scan: 10 staged paths, zero findings. Source whitespace is clean; unified patch context blank lines are retained for patch replay.
+
 ## Pending / owner gate
 
-- Commit/push reviewed source, carry patch and evidence; prepare exact manual rollout/rollback instructions.
+- Owner-run commands are ready in ROLLOUT.md. Await explicit Des approval/execution; code readiness does not authorize installation or restart.
 - No deployment, live write, daemon restart, app installation or inference has been performed. Live popup proof for Opus /550k and Haiku /112k is still pending; test/packaging proof is not device UAT.
 - Des temporarily routed reports through Zoe, then explicitly stopped contact with Zoe and status relays/acks. Continue independently; ask Des directly only when needed.
 - Des's earlier restart is not authorization for this deployment. Do not roll out or restart until Des explicitly approves. Manual owner rollout stops the app/daemon before replacing its archive, keeps a dated backup, then reopens it. Renderer and app-dist bytes remain unchanged; no full desktop build/install is needed.
