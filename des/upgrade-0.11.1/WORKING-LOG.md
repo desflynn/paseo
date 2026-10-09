@@ -43,9 +43,13 @@
 - Strong secret scan found zero hits across 42 candidate paths before proof artifacts; commit includes only explicit release/carry/proof paths, not local backups or runtime files.
 - Artifact sizes/hashes and live baseline are in `ARTIFACT-PROOF.txt`.
 
-## Pending
+## Delivery
 
-- Commit/push the verified merge and update delivery state. No installation or daemon restart.
+- Merge commit `d294e76c0` pushed to `origin/0.11.1-df`; verified divergence 0/0. Commit format/lint/typecheck hooks passed.
+- Bead `paseo-jji` closed. Dolt sync reports no remote configured and skips; issue remains in the local versioned Dolt store. Existing ignored `.beads` policy left untouched.
+- This delivery note is committed alongside the release record; app installation remains Des-manual.
+- Ready artifact: `packages/desktop/release/mac-arm64/Paseo.app`; DMG/ZIP are in `packages/desktop/release`. Branch identity is `0.11.1-df`; application version remains upstream `0.11.1`.
+- All code/build work is complete. No installation or production-daemon restart performed.
 
 ## Known gaps
 
