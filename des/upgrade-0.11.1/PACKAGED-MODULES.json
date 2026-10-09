@@ -1,0 +1,41 @@
+{
+  "version": "0.11.1",
+  "checks": [
+    {
+      "path": "session.js",
+      "match": true
+    },
+    {
+      "path": "workspace-labels/sub-label.js",
+      "match": true
+    },
+    {
+      "path": "agent/tools/paseo-tools.js",
+      "match": true
+    },
+    {
+      "path": "agent/providers/pi/agent.js",
+      "match": true
+    },
+    {
+      "path": "agent/providers/pi/cli-runtime.js",
+      "match": true
+    },
+    {
+      "path": "agent/providers/claude/agent.js",
+      "match": true
+    },
+    {
+      "path": "agent/providers/claude/subagents/live-source.js",
+      "match": true
+    },
+    {
+      "path": "agent/providers/claude/model-manifest.js",
+      "match": true
+    },
+    {
+      "path": "agent/providers/claude/project-dir.js",
+      "match": true
+    }
+  ]
+}

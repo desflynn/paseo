@@ -1,0 +1,5 @@
+app_version=0.11.1
+installed_version=0.11.0
+live_listener=14814 14811 Thu  8 Oct 10:15:34 2026
+Paseo-0.11.1-arm64.dmg size=185134776 sha256=ebd3cabacf4e669795e5de6902df669190a396ea8b4f5ff06cdc20e640c09272
+Paseo-0.11.1-arm64.zip size=179056173 sha256=2bdecfb62c868307f76a03666e74e148da847b93ef1fa5c24ff80ee4afb0f463

@@ -1,5 +1,5 @@
 diff --git a/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts b/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts
-index efb452e9b..32d5e7d28 100644
+index 84293afa6..32cb36e1e 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts
 @@ -553,6 +553,112 @@ describe("ClaudeAgentSession sub-agent sidechain updates", () => {
@@ -185,10 +185,10 @@ index 1223bbc54..00dae3270 100644
      const { session, subagentEvents } = await startInterruptibleTurn();
  
 diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
-index d505689a9..82fec548c 100644
+index b797ce2c9..3e938654e 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.ts
-@@ -4331,6 +4331,16 @@ class ClaudeAgentSession implements AgentSession {
+@@ -4336,6 +4336,16 @@ class ClaudeAgentSession implements AgentSession {
        ),
      ).map((event): AgentStreamEvent => ({ type: "provider_subagent", provider: "claude", event }));
      const routedId = canonicalSubagentId ?? parentToolUseId;
@@ -205,7 +205,7 @@ index d505689a9..82fec548c 100644
      return [...runtimeEvents, ...this.sidechainTracker.handleMessage(message, routedId)];
    }
  
-@@ -4624,6 +4634,14 @@ class ClaudeAgentSession implements AgentSession {
+@@ -4629,6 +4639,14 @@ class ClaudeAgentSession implements AgentSession {
      const usage = this.convertUsage(message, message.modelUsage);
      if (message.subtype === "success") {
        events.push(...this.sidechainTracker.finishAll("completed"));
@@ -220,7 +220,7 @@ index d505689a9..82fec548c 100644
        // Built-in slash commands (e.g. /voice, /usage, "Unknown command: …")
        // run client-side in the Claude CLI with no model turn — output_tokens
        // is 0 and the user-visible text is carried in `result`. Surface it only
-@@ -4915,7 +4933,12 @@ class ClaudeAgentSession implements AgentSession {
+@@ -4920,7 +4938,12 @@ class ClaudeAgentSession implements AgentSession {
        }
      }
      this.toolUseCache.clear();

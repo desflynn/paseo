@@ -10,7 +10,9 @@ Plugins (`des/plugins/`) and upgrade notes (`des/upgrade-*`) are not overlays. T
 
 Before switching the existing checkout, commit or classify every project-owned change. Seed the
 new branch with the preserved plugin, overlay and harness assets so daemon-served paths remain
-available. Use the following patch order on `v0.11.0`; overlay 2 is superseded on this base.
+available. Use the following patch order on `v0.11.1`; overlay 2 remains superseded.
+The nine-patch stack reproduces 30 carried files byte-for-byte on this base; see
+`../upgrade-0.11.1/WORKING-LOG.md`.
 
 ```bash
 git apply --3way des/overlays/unsigned-macos-build.patch
@@ -52,7 +54,8 @@ What it must achieve:
    as reference only.** On a new base, run `npm install`, read which install scripts npm blocks,
    and approve those exact versions.
 
-Last verified: regenerated against `v0.11.0`, with all 13 resolved install-script approvals (2026-10-07).
+Last verified: regenerated against `v0.11.1`, with the same 13 resolved install-script approvals;
+`npm install` succeeds without external dependency-version changes (2026-10-09).
 
 ## 2. ACP context meter
 
@@ -164,8 +167,12 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
   `completed` (`completeRunningForegroundTasks`, backgrounded rows untouched); legacy rows are made
   only under subagent tools (`isClaudeSubagentToolName`), so MCP tool calls no longer show as
   nameless "Claude subagent" rows.
-- 0.11 carry preserves upstream #6295's background-helper routing and survival; six new-base
+- The 0.11 carry preserves upstream #6295's background-helper routing and survival; six new-base
   RED cases restore to 66/66 GREEN. See `../upgrade-0.11/CLAUDE-CARRY-WORKLOG.md`.
+- On 0.11.1, retain this overlay alongside #6308's heartbeat guard and #6316's client reconnect
+  resync. The new heartbeat case already passes through the broader DF legacy gate; the server
+  completion/cancellation behaviours still need this overlay. The three carry suites pass 67/67;
+  regenerated patch replay is byte-exact. See `../upgrade-0.11.1/WORKING-LOG.md`.
 
 ## 10. Pi MCP server and action labels
 
