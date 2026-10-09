@@ -1,0 +1,757 @@
+diff --git a/packages/server/src/server/agent/providers/claude/agent.test.ts b/packages/server/src/server/agent/providers/claude/agent.test.ts
+index 9f7430b10..29ae75afd 100644
+--- a/packages/server/src/server/agent/providers/claude/agent.test.ts
++++ b/packages/server/src/server/agent/providers/claude/agent.test.ts
+@@ -1898,6 +1898,7 @@ describe("ClaudeAgentSession context window usage", () => {
+   interface QueryFactoryForTurnsOptions {
+     getContextUsage?: ReturnType<typeof vi.fn>;
+     model?: string;
++    runtimeEnv?: Record<string, string>;
+   }
+ 
+   async function createSessionForTest(): Promise<TestClaudeSession> {
+@@ -1917,6 +1918,7 @@ describe("ClaudeAgentSession context window usage", () => {
+       logger,
+       queryFactory: createQueryFactoryForTurns(turns, options),
+       resolveBinary: async () => "/test/claude/bin",
++      ...(options?.runtimeEnv ? { runtimeSettings: { env: options.runtimeEnv } } : {}),
+     });
+     return await client.createSession({
+       provider: "claude",
+@@ -2036,6 +2038,7 @@ describe("ClaudeAgentSession context window usage", () => {
+         }),
+         setPermissionMode: vi.fn(async () => undefined),
+         setModel: vi.fn(async () => undefined),
++        applyFlagSettings: vi.fn(async () => undefined),
+         getContextUsage,
+         supportedModels: vi.fn(async () => []),
+         supportedCommands: vi.fn(async () => []),
+@@ -2826,6 +2829,497 @@ describe("ClaudeAgentSession context window usage", () => {
+     }
+   });
+ 
++  test("user modelSettings autoCompactWindow overrides the SDK-reported context window denominator", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        modelSettings: { "claude-opus-5-5": { autoCompactWindow: 550_000 } },
++      }),
++      "utf8",
++    );
++    try {
++      const session = await createSessionForTurns(
++        [
++          [
++            createInitMessage(),
++            createMessageStartEvent(),
++            createSuccessResult({
++              modelUsage: { "claude-opus-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++        ],
++        { model: "claude-opus-5-5", runtimeEnv: { CLAUDE_CONFIG_DIR: configDir } },
++      );
++
++      try {
++        const result = await session.run("turn");
++
++        expect(result.usage?.contextWindowMaxTokens).toBe(550_000);
++        expect(result.usage?.contextWindowUsedTokens).toBe(150);
++      } finally {
++        await session.close();
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("env CLAUDE_CODE_AUTO_COMPACT_WINDOW wins over user settings", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        autoCompactWindow: 400_000,
++        modelSettings: { "claude-opus-5-5": { autoCompactWindow: 550_000 } },
++      }),
++      "utf8",
++    );
++    try {
++      const session = await createSessionForTurns(
++        [
++          [
++            createInitMessage(),
++            createSuccessResult({
++              modelUsage: { "claude-opus-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++        ],
++        {
++          model: "claude-opus-5-5",
++          runtimeEnv: {
++            CLAUDE_CONFIG_DIR: configDir,
++            CLAUDE_CODE_AUTO_COMPACT_WINDOW: "480000",
++          },
++        },
++      );
++
++      try {
++        const result = await session.run("turn");
++        expect(result.usage?.contextWindowMaxTokens).toBe(480_000);
++      } finally {
++        await session.close();
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("top-level settings autoCompactWindow applies when the model key does not match", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        autoCompactWindow: 400_000,
++        modelSettings: { "claude-haiku-5-5": { autoCompactWindow: 112_000 } },
++      }),
++      "utf8",
++    );
++    try {
++      const session = await createSessionForTurns(
++        [
++          [
++            createInitMessage(),
++            createSuccessResult({
++              modelUsage: { "claude-opus-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++        ],
++        { model: "claude-opus-5-5", runtimeEnv: { CLAUDE_CONFIG_DIR: configDir } },
++      );
++
++      try {
++        const result = await session.run("turn");
++        expect(result.usage?.contextWindowMaxTokens).toBe(400_000);
++      } finally {
++        await session.close();
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("modelSettings lookup uses the real SDK modelUsage key when config model is unset", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        modelSettings: { "claude-opus-5-5": { autoCompactWindow: 550_000 } },
++      }),
++      "utf8",
++    );
++    try {
++      const session = await createSessionForTurns(
++        [
++          [
++            createInitMessage(),
++            createSuccessResult({
++              modelUsage: { "claude-opus-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++        ],
++        { runtimeEnv: { CLAUDE_CONFIG_DIR: configDir } },
++      );
++
++      try {
++        const result = await session.run("turn");
++        expect(result.usage?.contextWindowMaxTokens).toBe(550_000);
++      } finally {
++        await session.close();
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("a helper model does not inflate the primary Haiku auto-compact window", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        modelSettings: {
++          "claude-haiku-5-5": { autoCompactWindow: 112_000 },
++          "claude-opus-5-5": { autoCompactWindow: 550_000 },
++        },
++      }),
++    );
++    const session = await createSessionForTurns(
++      [
++        [
++          { ...createInitMessage(), model: "claude-haiku-5-5" },
++          createSuccessResult({
++            modelUsage: {
++              "claude-opus-5-5": { contextWindow: 1_000_000 },
++              "claude-haiku-5-5": { contextWindow: 1_000_000 },
++            },
++          }),
++        ],
++      ],
++      { model: "claude-haiku-5-5", runtimeEnv: { CLAUDE_CONFIG_DIR: configDir } },
++    );
++    try {
++      const result = await session.run("turn");
++      expect(result.usage?.contextWindowMaxTokens).toBe(112_000);
++    } finally {
++      await session.close();
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("SDK init seeds the configured window before the first stream when model is unset", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        modelSettings: { "claude-haiku-5-5": { autoCompactWindow: 112_000 } },
++      }),
++    );
++    const session = await createSessionForTurns(
++      [
++        [
++          { ...createInitMessage(), model: "claude-haiku-5-5" },
++          createMessageStartEvent(),
++          createSuccessResult({ modelUsage: { "claude-haiku-5-5": { contextWindow: 1_000_000 } } }),
++        ],
++      ],
++      { runtimeEnv: { CLAUDE_CONFIG_DIR: configDir } },
++    );
++    try {
++      const events = await collectStreamEvents(session);
++      expect(events).toContainEqual(
++        expect.objectContaining({
++          type: "usage_updated",
++          usage: { contextWindowMaxTokens: 112_000, contextWindowUsedTokens: 150 },
++        }),
++      );
++    } finally {
++      await session.close();
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("Haiku 112000 settings override the 1M SDK window for result and stream denominators", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        modelSettings: { "claude-haiku-5-5": { autoCompactWindow: 112_000 } },
++      }),
++      "utf8",
++    );
++    try {
++      const session = await createSessionForTurns(
++        [
++          [
++            createInitMessage(),
++            createSuccessResult({
++              modelUsage: { "claude-haiku-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++          [
++            createInitMessage(),
++            createMessageStartEvent(),
++            createMessageDeltaEvent(50),
++            createSuccessResult({
++              modelUsage: { "claude-haiku-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++        ],
++        { model: "claude-haiku-5-5", runtimeEnv: { CLAUDE_CONFIG_DIR: configDir } },
++      );
++
++      try {
++        const turnResult = await session.run("turn");
++        expect(turnResult.usage?.contextWindowMaxTokens).toBe(112_000);
++
++        const events = await collectStreamEvents(session);
++        expect(events).toContainEqual(
++          expect.objectContaining({
++            type: "usage_updated",
++            provider: "claude",
++            usage: {
++              contextWindowMaxTokens: 112_000,
++              contextWindowUsedTokens: 200,
++            },
++          }),
++        );
++      } finally {
++        await session.close();
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("auto-compact window override is capped at the SDK-reported model window", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    try {
++      const session = await createSessionForTurns(
++        [
++          [
++            createInitMessage(),
++            createSuccessResult({
++              modelUsage: { "claude-opus-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++        ],
++        {
++          model: "claude-opus-5-5",
++          runtimeEnv: {
++            CLAUDE_CONFIG_DIR: configDir,
++            CLAUDE_CODE_AUTO_COMPACT_WINDOW: "2000000",
++          },
++        },
++      );
++
++      try {
++        const result = await session.run("turn");
++        expect(result.usage?.contextWindowMaxTokens).toBe(1_000_000);
++      } finally {
++        await session.close();
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE does not change the denominator", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        modelSettings: { "claude-opus-5-5": { autoCompactWindow: 550_000 } },
++      }),
++      "utf8",
++    );
++    try {
++      const session = await createSessionForTurns(
++        [
++          [
++            createInitMessage(),
++            createSuccessResult({
++              modelUsage: { "claude-opus-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++        ],
++        {
++          model: "claude-opus-5-5",
++          runtimeEnv: {
++            CLAUDE_CONFIG_DIR: configDir,
++            CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "90",
++          },
++        },
++      );
++
++      try {
++        const result = await session.run("turn");
++        expect(result.usage?.contextWindowMaxTokens).toBe(550_000);
++      } finally {
++        await session.close();
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("invalid env window values fall through to user settings", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        modelSettings: { "claude-opus-5-5": { autoCompactWindow: 550_000 } },
++      }),
++      "utf8",
++    );
++    try {
++      for (const invalidEnvValue of ["not-a-number", "0", "-5", "Infinity"]) {
++        const session = await createSessionForTurns(
++          [
++            [
++              createInitMessage(),
++              createSuccessResult({
++                modelUsage: { "claude-opus-5-5": { contextWindow: 1_000_000 } },
++              }),
++            ],
++          ],
++          {
++            model: "claude-opus-5-5",
++            runtimeEnv: {
++              CLAUDE_CONFIG_DIR: configDir,
++              CLAUDE_CODE_AUTO_COMPACT_WINDOW: invalidEnvValue,
++            },
++          },
++        );
++
++        try {
++          const result = await session.run("turn");
++          expect(result.usage?.contextWindowMaxTokens).toBe(550_000);
++        } finally {
++          await session.close();
++        }
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("numeric string in settings is rejected in favour of a numeric top-level value", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        autoCompactWindow: 400_000,
++        modelSettings: { "claude-opus-5-5": { autoCompactWindow: "550000" } },
++      }),
++      "utf8",
++    );
++    try {
++      const session = await createSessionForTurns(
++        [
++          [
++            createInitMessage(),
++            createSuccessResult({
++              modelUsage: { "claude-opus-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++        ],
++        { model: "claude-opus-5-5", runtimeEnv: { CLAUDE_CONFIG_DIR: configDir } },
++      );
++
++      try {
++        const result = await session.run("turn");
++        expect(result.usage?.contextWindowMaxTokens).toBe(400_000);
++      } finally {
++        await session.close();
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("no override preserves the SDK-reported window even when it differs from the manifest", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    try {
++      const session = await createSessionForTurns(
++        [
++          [
++            createInitMessage(),
++            createSuccessResult({
++              modelUsage: { "claude-sonnet-4-6": { contextWindow: 321_000 } },
++            }),
++          ],
++        ],
++        { model: "claude-sonnet-4-6", runtimeEnv: { CLAUDE_CONFIG_DIR: configDir } },
++      );
++
++      try {
++        const result = await session.run("turn");
++        expect(result.usage?.contextWindowMaxTokens).toBe(321_000);
++      } finally {
++        await session.close();
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
++  test("model switch re-resolves the effective window from the new model's settings", async () => {
++    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-claude-compact-"));
++    await fs.writeFile(
++      path.join(configDir, "settings.json"),
++      JSON.stringify({
++        modelSettings: {
++          "claude-sonnet-5-5": { autoCompactWindow: 480_000 },
++          "claude-opus-5-5": { autoCompactWindow: 550_000 },
++        },
++      }),
++      "utf8",
++    );
++    try {
++      const session = await createSessionForTurns(
++        [
++          [
++            createInitMessage(),
++            createSuccessResult({
++              modelUsage: { "claude-sonnet-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++          [
++            createInitMessage(),
++            createMessageStartEvent(),
++            createSuccessResult({
++              modelUsage: { "claude-opus-5-5": { contextWindow: 1_000_000 } },
++            }),
++          ],
++        ],
++        { model: "claude-sonnet-5-5", runtimeEnv: { CLAUDE_CONFIG_DIR: configDir } },
++      );
++
++      try {
++        const sonnetResult = await session.run("turn");
++        expect(sonnetResult.usage?.contextWindowMaxTokens).toBe(480_000);
++
++        await session.setModel("claude-opus-5-5");
++
++        const events = await collectStreamEvents(session);
++        expect(events).toContainEqual(
++          expect.objectContaining({
++            type: "usage_updated",
++            provider: "claude",
++            usage: {
++              contextWindowMaxTokens: 550_000,
++              contextWindowUsedTokens: 150,
++            },
++          }),
++        );
++      } finally {
++        await session.close();
++      }
++    } finally {
++      await fs.rm(configDir, { recursive: true, force: true });
++    }
++  });
++
+   test("message_delta stream events update per-request usage", async () => {
+     const session = await createSessionForTurns([
+       [
+diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
+index 3e938654e..0bc569c8e 100644
+--- a/packages/server/src/server/agent/providers/claude/agent.ts
++++ b/packages/server/src/server/agent/providers/claude/agent.ts
+@@ -1798,14 +1798,77 @@ async function resolveClaudeAuth(
+   }
+ }
+ 
+-function extractContextWindowSize(modelUsage: unknown): number | undefined {
++function readPositiveWindowTokens(value: unknown): number | undefined {
++  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
++}
++
++function parseEnvWindowTokens(value: string | undefined): number | undefined {
++  if (typeof value !== "string" || value.trim().length === 0) {
++    return undefined;
++  }
++  const parsed = Number(value.trim());
++  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
++}
++
++/**
++ * Reads Claude user settings.json for the auto-compact window resolution. Returns undefined when
++ * the file is missing or unparsable. Only the autoCompactWindow fields are ever interpreted;
++ * settings content is never logged.
++ */
++function readClaudeSettingsRecord(configDir: string): Record<string, unknown> | undefined {
++  try {
++    const parsed: unknown = JSON.parse(
++      fs.readFileSync(path.join(configDir, "settings.json"), "utf8"),
++    );
++    return toObjectRecord(parsed);
++  } catch {
++    return undefined;
++  }
++}
++
++/**
++ * Effective auto-compact window denominator override for one model.
++ * Precedence: CLAUDE_CODE_AUTO_COMPACT_WINDOW > modelSettings[model id].autoCompactWindow >
++ * top-level autoCompactWindow. Invalid values (non-numeric in settings, nonpositive or
++ * nonfinite anywhere) fall through to the next source. Returns undefined when nothing is
++ * configured, meaning the SDK-reported window wins unchanged.
++ */
++function resolveAutoCompactWindowOverride(
++  envValue: string | undefined,
++  settings: Record<string, unknown> | undefined,
++  modelId: string | undefined,
++): number | undefined {
++  const fromEnv = parseEnvWindowTokens(envValue);
++  if (fromEnv !== undefined) {
++    return fromEnv;
++  }
++  if (!settings) {
++    return undefined;
++  }
++  if (modelId !== undefined) {
++    const modelSettings = toObjectRecord(settings.modelSettings);
++    const fromModel = readPositiveWindowTokens(
++      toObjectRecord(modelSettings?.[modelId])?.autoCompactWindow,
++    );
++    if (fromModel !== undefined) {
++      return fromModel;
++    }
++  }
++  return readPositiveWindowTokens(settings.autoCompactWindow);
++}
++
++function extractContextWindowSize(
++  modelUsage: unknown,
++  resolveUsageModelAutoCompactOverride?: (modelId: string) => number | undefined,
++  primaryModelId?: string,
++): number | undefined {
+   const usageRecord = toObjectRecord(modelUsage);
+   if (!usageRecord) {
+     return undefined;
+   }
+ 
+   let maxContextWindow: number | undefined;
+-  for (const value of Object.values(usageRecord)) {
++  for (const [modelId, value] of Object.entries(usageRecord)) {
+     const valueRecord = toObjectRecord(value);
+     if (!valueRecord) {
+       continue;
+@@ -1818,7 +1881,18 @@ function extractContextWindowSize(modelUsage: unknown): number | undefined {
+     ) {
+       continue;
+     }
+-    maxContextWindow = Math.max(maxContextWindow ?? 0, contextWindow);
++    // Without a configured override the SDK-reported window is preserved exactly, even when it
++    // differs from the manifest. An override is capped at the model's real window.
++    let effectiveWindow = contextWindow;
++    const override = resolveUsageModelAutoCompactOverride?.(modelId);
++    if (override !== undefined) {
++      effectiveWindow = Math.min(override, contextWindow);
++      // Helper model usage must not inflate the configured primary session window.
++      if ((findClaudeModel(modelId)?.id ?? modelId) === primaryModelId) {
++        return effectiveWindow;
++      }
++    }
++    maxContextWindow = Math.max(maxContextWindow ?? 0, effectiveWindow);
+   }
+ 
+   return maxContextWindow;
+@@ -1946,8 +2020,16 @@ class ClaudeContextUsageState {
+     this.contextWindowMaxTokens = contextWindowMaxTokens;
+   }
+ 
+-  recordModelUsage(modelUsage: unknown): number | undefined {
+-    const contextWindowMaxTokens = extractContextWindowSize(modelUsage);
++  recordModelUsage(
++    modelUsage: unknown,
++    resolveUsageModelAutoCompactOverride?: (modelId: string) => number | undefined,
++    primaryModelId?: string,
++  ): number | undefined {
++    const contextWindowMaxTokens = extractContextWindowSize(
++      modelUsage,
++      resolveUsageModelAutoCompactOverride,
++      primaryModelId,
++    );
+     if (contextWindowMaxTokens !== undefined) {
+       this.contextWindowMaxTokens = contextWindowMaxTokens;
+     }
+@@ -1984,7 +2066,12 @@ class ClaudeContextUsageState {
+     return this.createUsageUpdatedEvent(usedTokens);
+   }
+ 
+-  buildResultUsage(message: SDKResultMessage, modelUsage: unknown): AgentUsage | undefined {
++  buildResultUsage(
++    message: SDKResultMessage,
++    modelUsage: unknown,
++    resolveUsageModelAutoCompactOverride?: (modelId: string) => number | undefined,
++    primaryModelId?: string,
++  ): AgentUsage | undefined {
+     try {
+       if (!message.usage) {
+         return undefined;
+@@ -1996,7 +2083,11 @@ class ClaudeContextUsageState {
+         totalCostUsd: message.total_cost_usd,
+       };
+ 
+-      const modelContextWindowMaxTokens = this.recordModelUsage(modelUsage ?? message.modelUsage);
++      const modelContextWindowMaxTokens = this.recordModelUsage(
++        modelUsage ?? message.modelUsage,
++        resolveUsageModelAutoCompactOverride,
++        primaryModelId,
++      );
+       if (this.contextWindowMaxTokens !== undefined) {
+         usage.contextWindowMaxTokens = this.contextWindowMaxTokens;
+       } else if (modelContextWindowMaxTokens !== undefined) {
+@@ -2171,9 +2262,7 @@ class ClaudeAgentSession implements AgentSession {
+     this.queryFactory = options.queryFactory;
+     this.resolveBinary = options.resolveBinary;
+     this.rewindSdk = options.rewindSdk ?? realClaudeRewindSdk;
+-    this.contextUsage = new ClaudeContextUsageState(
+-      findClaudeModel(this.config.model)?.contextWindowMaxTokens,
+-    );
++    this.contextUsage = new ClaudeContextUsageState(this.resolveInitialContextWindowMaxTokens());
+     const handle = options.handle;
+ 
+     if (handle) {
+@@ -2503,9 +2592,7 @@ class ClaudeAgentSession implements AgentSession {
+     if (!claudeModelSupportsFastMode(this.config.model) && this.config.featureValues?.fast_mode) {
+       await this.applyFastModeFeature(false, activeQuery);
+     }
+-    this.contextUsage.setInitialContextWindowMaxTokens(
+-      findClaudeModel(this.config.model)?.contextWindowMaxTokens,
+-    );
++    this.contextUsage.setInitialContextWindowMaxTokens(this.resolveInitialContextWindowMaxTokens());
+     this.lastOptionsModel = normalizedModelId ?? this.lastOptionsModel;
+     this.lastRuntimeModel = null;
+     this.cachedRuntimeInfo = null;
+@@ -4783,6 +4870,15 @@ class ClaudeAgentSession implements AgentSession {
+       }
+       this.lastRuntimeModel = message.model;
+       this.cachedRuntimeInfo = null;
++      const runtimeModel = findClaudeModel(message.model);
++      const override = this.resolveConfiguredAutoCompactWindowOverride(
++        runtimeModel?.id ?? message.model,
++      );
++      if (override !== undefined) {
++        this.contextUsage.setInitialContextWindowMaxTokens(
++          Math.min(override, runtimeModel?.contextWindowMaxTokens ?? override),
++        );
++      }
+     }
+     return { threadStartedSessionId, notice };
+   }
+@@ -4820,8 +4916,41 @@ class ClaudeAgentSession implements AgentSession {
+     return null;
+   }
+ 
++  private readonly resolveUsageModelAutoCompactOverride = (modelId: string): number | undefined =>
++    this.resolveConfiguredAutoCompactWindowOverride(findClaudeModel(modelId)?.id ?? modelId);
++
++  private resolveConfiguredAutoCompactWindowOverride(
++    modelId: string | undefined,
++  ): number | undefined {
++    return resolveAutoCompactWindowOverride(
++      this.harnessEnvironment["CLAUDE_CODE_AUTO_COMPACT_WINDOW"],
++      readClaudeSettingsRecord(claudeConfigDir(this.harnessEnvironment)),
++      modelId,
++    );
++  }
++
++  /** Initial denominator before any SDK modelUsage arrives: the effective override if configured,
++   * capped at the manifest model window, otherwise the manifest window itself. */
++  private resolveInitialContextWindowMaxTokens(): number | undefined {
++    const model = findClaudeModel(this.config.model);
++    const modelWindow = model?.contextWindowMaxTokens;
++    const override = this.resolveConfiguredAutoCompactWindowOverride(
++      model?.id ?? this.config.model,
++    );
++    if (override === undefined) {
++      return modelWindow;
++    }
++    return modelWindow !== undefined ? Math.min(override, modelWindow) : override;
++  }
++
+   private convertUsage(message: SDKResultMessage, modelUsage?: unknown): AgentUsage | undefined {
+-    return this.contextUsage.buildResultUsage(message, modelUsage);
++    const primaryModelId = this.lastRuntimeModel ?? this.config.model;
++    return this.contextUsage.buildResultUsage(
++      message,
++      modelUsage,
++      this.resolveUsageModelAutoCompactOverride,
++      findClaudeModel(primaryModelId)?.id ?? primaryModelId,
++    );
+   }
+ 
+   private handlePermissionRequest: CanUseTool = async (

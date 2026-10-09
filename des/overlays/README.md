@@ -11,8 +11,8 @@ Plugins (`des/plugins/`) and upgrade notes (`des/upgrade-*`) are not overlays. T
 Before switching the existing checkout, commit or classify every project-owned change. Seed the
 new branch with the preserved plugin, overlay and harness assets so daemon-served paths remain
 available. Use the following patch order on `v0.11.1`; overlay 2 remains superseded.
-The nine-patch stack reproduces 30 carried files byte-for-byte on this base; see
-`../upgrade-0.11.1/WORKING-LOG.md`.
+The ten-patch stack reproduces 31 carried files byte-for-byte on this base; see
+`../claude-auto-compact-window/REPLAY-PROOF.txt`.
 
 ```bash
 git apply --3way des/overlays/unsigned-macos-build.patch
@@ -24,6 +24,7 @@ git apply --3way des/overlays/pi-worktree-trust.patch
 git apply --3way des/overlays/pi-compaction-status.patch
 git apply --3way des/overlays/claude-stale-subagent.patch
 git apply --3way des/overlays/pi-mcp-labels.patch
+git apply --3way des/overlays/claude-auto-compact-window.patch
 npm install                 # approve exact resolved install-script versions, see overlay 1
 npm run build:desktop        # from the repo root; installation is a separate owner action
 ```
@@ -184,3 +185,13 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
 - Apply after the Pi hold/status overlays. Parent display/adapter/history suites 39/39; host
   transformer 8/8; emission regression passes within Pi's 127/127 suite on `v0.11.0`.
 - Evidence: `../upgrade-0.11/PI-CARRY-WORKLOG.md` and `../upgrade-0.11/WORKING-LOG.md`.
+
+## 11. Claude effective auto-compact window
+
+- Patch: `claude-auto-compact-window.patch`; apply after the Claude cleanup overlay.
+- Report the configured auto-compact window rather than the model's full window. Resolve the
+  SDK environment override, model-specific user setting, then top-level user setting; cap the
+  override at the model window. Without an override, preserve SDK reporting unchanged.
+- Seed first-stream usage from SDK init and keep helper model usage from inflating the primary
+  configured window. Token accounting and the percentage trigger override stay unchanged.
+- Evidence: `../claude-auto-compact-window/WORKING-LOG.md`; 101 focused cases GREEN.
