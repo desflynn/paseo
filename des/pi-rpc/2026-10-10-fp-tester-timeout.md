@@ -29,6 +29,36 @@ Confirmed failure: Paseo's prompt acknowledgement deadline expired; it is not a 
 
 Exact time spent in each Pi preflight await, and whether an acknowledgement was eventually emitted with the original request id, cannot be recovered from current info logs alone. A lost/misidentified response is not fully excluded. Pi-side need: inspect/correlate preflight compaction/deferred-settlement and callback timing for this session; no restart, new inference or changes are authorized by this trace.
 
+## Upstream versus fork provenance
+
+Checked against upstream tag v0.11.1 and git blame/history. Installed packaged Pi agent.js also matches the checkout's compiled Pi agent byte-for-byte.
+
+| Behaviour                                                   | Source and provenance                                                                                                                                                                                                                                                  |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 60000 ms Pi RPC default, including prompt ACK               | agent.ts:107,113; upstream 463415ae846cbcfef0df691e413a1a73a9213757, `fix(providers): tolerate slow Pi and OMP RPC startup (#4008)`. Present unchanged in v0.11.1. Despite the startup title, it supplies the runtime's default request deadline.                      |
+| Manual compact RPC has NO wall-clock timeout                | cli-runtime.ts:193-197,298-302; semantic introduction b4518cbf3352210cefec1715c00ad000c4abd20f, `remove wall-clock timeout for Pi compact RPC (#2181)`; current blame lands on upstream licensing commit a8734a972495cf343f628d1017e87775767aade5. Present in v0.11.1. |
+| Hold startTurn while our manual compact RPC is pending      | OUR 2419f0e5b921f6788df75bb4199b5962c2e65dce; carried by 09bde0ff7aaab5720a3f7e2fc8cc4e7c8825c6e0. des/overlays/pi-compaction-hold.patch. Absent from v0.11.1; overlay contains no 60-second setting.                                                                  |
+| Keep turn active through agent_end, finish on agent_settled | Upstream c032df5b3d0ca6eefec02d3ced1012a7c782e720 (#3639) and c424f82922fcd36aa9cc9e473644bca04417b420 (#3849); agent.ts:2272-2282. pendingSettledMessages is completion bookkeeping, not our post-compaction prompt-send gate.                                        |
+| Pi ACK-after-preflight and deferred-settled prompt drain    | Pi Fixer independently verifies upstream v1.0.4, installed 1.0.4-df/2dfa1f166; diff of agent-session.ts/rpc-mode.ts against v1.0.4 and working tree is empty. Not our Pi fork changes. Captain evidence: /Users/des/dev/pi/.dci/pi-rpc-timeout.md.                     |
+
+### What our manual gate actually waits for
+
+agent.ts:1805-1809 creates manualCompactionSettled before calling runtimeSession.compact at 1811. Its finally at 1836-1838 resolves the gate on RPC completion or failure and clears it. startTurn:1305-1314 awaits the captured promise, checks that the turn was not cancelled, THEN calls runtimeSession.prompt. JsonlRpcProcess starts the prompt ACK clock only at that latter call; time spent waiting in our gate is not counted in the 60 seconds.
+
+It is not released by a compaction_end UI event. compact uses JSONL_RPC_NO_TIMEOUT, so a 60-second compact deadline does not prematurely release it. Success means Pi's compact RPC returned after session.compact completed. Installed Pi clears its manual compaction controller before emitting compaction_end and returning (agent-session.js:2254-2263,2287-2288).
+
+This gate covers manual compaction initiated through this Paseo session instance. It does not gate automatic compaction inside a subsequently submitted prompt, a fresh session after reload, or Pi's separate \_isEmittingAgentSettled/deferred-action drain. It guarantees no delivery during that successful manual compact RPC; it is not a global Pi-settlement-idle barrier. Failure also releases the gate; the source does not establish every failure as a successful idle settlement.
+
+### Separate upstream Pi queue
+
+Pi Fixer confirms agent-session.ts:1066-1084 keeps \_isEmittingAgentSettled true while awaiting extension agent_settled handlers, emits the native event, clears the flag, then sequentially awaits every deferred action. prompt:1954-1957 enqueues async () => await this.prompt(text, options) without immediately acknowledging it. Each action awaits preflight AND the entire agent prompt; later actions can therefore wait behind an earlier model/tool turn. An RPC prompt sent during that period can be validly deferred yet exceed Paseo's 60-second acknowledgement budget.
+
+### Supported verdict for this receipt
+
+The deadline and Pi deferred/ACK contract are upstream; the manual hold is ours. The receipt proves both prompt calls reached the RPC stage, so any captured manual gate had already released or was absent. It does not prove our gate released too early, nor which Pi preflight/deferred await owned the delay. The late compaction/user entry strongly fits upstream preflight/deferred settlement, but exact response IDs and await timing remain missing. Do not remove the protective manual gate or simply increase the timeout based on this evidence.
+
+Narrow remedy discussion should distinguish (1) accepted/deferred prompt acknowledgement semantics on Pi, preserving preflight failure reporting, from (2) progress-aware prompt handling in Paseo. Establish the failing contract branch first. No remedy implementation is authorized by this provenance request.
+
 ## Pending
 
 - Evidence and bounded Pi-side need sent to Pi Fixer d11bb301-7d39-4239-9dd7-c3bc3799faf5; pickup confirmed. It is verifying the installed ACK contract and native compaction timeline read-only. Await its confirmation.
