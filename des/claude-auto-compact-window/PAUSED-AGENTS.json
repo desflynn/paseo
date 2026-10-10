@@ -1,0 +1,36 @@
+{
+  "authority": "Des: stop all active agents; reactivate only on my continue go",
+  "agents": [
+    {
+      "id": "9cd8da13-6a35-4ff3-ae40-81805a315ae7",
+      "name": "\ud83e\uddea FP-TESTER UAT the dynamic operation",
+      "provider": "pi/openai-codex/gpt-6.1-sol",
+      "status": "running",
+      "cwd": "~/dev/dci-harness"
+    },
+    {
+      "id": "5d8a06d0-9b93-48af-9558-1b294a296dbb",
+      "name": "\ud83e\uddd1\u200d\ud83d\udcbcDGX Doer Guy",
+      "provider": "pi/openai-codex/gpt-6.1-sol",
+      "status": "running",
+      "cwd": "~/dev/dgx-spark-lab"
+    },
+    {
+      "id": "0ba29851-ef0e-4847-b014-99167dfb78f1",
+      "name": "\ud83d\udc68\u200d\ud83d\udd27Paseo Fixer Guy",
+      "provider": "pi/openai-codex/gpt-6.1-sol",
+      "status": "running",
+      "cwd": "~/dev/paseo"
+    },
+    {
+      "id": "9a9a1d88-7cad-40c6-a60e-ba6f8b68a8dd",
+      "name": "\ud83e\uddd0 SUPER-SH-5",
+      "provider": "pi/openai-codex/gpt-6.1-sol",
+      "status": "running",
+      "cwd": "~/dev/dci-harness"
+    }
+  ],
+  "otherAgentsStopped": true,
+  "selfStopsWithRollout": true,
+  "reactivationAuthorized": false
+}
