@@ -3270,6 +3270,30 @@ export class Session {
         }
       }
 
+      // SUB overlay (des/overlays): a detached agent is a root agent, not a
+      // subagent. When it is alone in its workspace, clear the SUB label the
+      // creation path applied.
+      const detachedWorkspaceId = result.record.workspaceId ?? null;
+      if (detachedWorkspaceId && this.workspaceLabelService) {
+        const occupied = this.agentManager
+          .listAgents()
+          .some((agent) => agent.id !== agentId && agent.workspaceId === detachedWorkspaceId);
+        if (!occupied) {
+          await this.workspaceLabelService
+            .setAssignment({
+              workspaceId: detachedWorkspaceId,
+              label: { name: "SUB", color: "sky" },
+              assigned: false,
+            })
+            .catch((error: unknown) => {
+              this.sessionLogger.warn(
+                { err: error, workspaceId: detachedWorkspaceId },
+                "Failed to clear SUB workspace label",
+              );
+            });
+        }
+      }
+
       await this.emitWorkspaceUpdatesForWorkspaceIds(affectedWorkspaceIds);
 
       this.emit({

@@ -1580,6 +1580,7 @@ describe("agent detach RPC", () => {
       agentManager: {
         getAgent,
         detachAgent,
+        listAgents: vi.fn(() => []),
       },
       agentStorage: {
         list: vi.fn().mockResolvedValue([]),
@@ -1633,6 +1634,125 @@ describe("agent detach RPC", () => {
         error: null,
       },
     });
+  });
+
+  test("detaching an agent alone in its workspace clears the SUB overlay", async () => {
+    const childAfter = createStoredAgentRecord({
+      id: "child-agent",
+      cwd: "/tmp/child",
+      workspaceId: "workspace-child",
+      labels: {},
+    });
+    const workspace = {
+      workspaceId: "workspace-child",
+      projectId: "project-child",
+      cwd: "/tmp/child",
+      kind: "worktree" as const,
+      displayName: "Child workspace",
+      title: null,
+      branch: "child",
+      baseBranch: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+    };
+    const project = {
+      projectId: "project-child",
+      rootPath: "/tmp/child",
+      kind: "git" as const,
+      displayName: "Project",
+      customName: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+    };
+    const setAssignment = vi.fn(async (input: { label: { name: string } }) => ({
+      label: input.label,
+      workspaceLabels: [],
+    }));
+    const detachAgent = vi.fn().mockResolvedValue({
+      record: childAfter,
+      live: false,
+      previousParentAgentId: "parent-agent",
+    });
+
+    const session = createSessionForTest({
+      agentManager: {
+        getAgent: vi.fn(() => null),
+        detachAgent,
+        // Post-detach the child is alone in its workspace.
+        listAgents: vi.fn(() => [{ id: "child-agent", workspaceId: "workspace-child" }]),
+      },
+      agentStorage: {
+        list: vi.fn().mockResolvedValue([]),
+        get: vi.fn().mockResolvedValue(null),
+      },
+      workspaceRegistry: {
+        get: vi.fn().mockResolvedValue(workspace),
+        list: vi.fn().mockResolvedValue([workspace]),
+      },
+      projectRegistry: {
+        get: vi.fn().mockResolvedValue(project),
+        list: vi.fn().mockResolvedValue([project]),
+      },
+      workspaceLabelService: { setAssignment } as unknown as WorkspaceLabelService,
+    });
+
+    await session.handleMessage({
+      type: "agent.detach.request",
+      agentId: "child-agent",
+      requestId: "detach-sub-1",
+    });
+
+    expect(detachAgent).toHaveBeenCalledWith("child-agent");
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: "workspace-child",
+      label: { name: "SUB", color: "sky" },
+      assigned: false,
+    });
+  });
+
+  test("detaching an agent in an occupied workspace does not clear SUB", async () => {
+    const childAfter = createStoredAgentRecord({
+      id: "child-agent",
+      cwd: "/tmp/child",
+      workspaceId: "workspace-child",
+      labels: {},
+    });
+    const setAssignment = vi.fn(async (input: { label: { name: string } }) => ({
+      label: input.label,
+      workspaceLabels: [],
+    }));
+    const detachAgent = vi.fn().mockResolvedValue({
+      record: childAfter,
+      live: false,
+      previousParentAgentId: "parent-agent",
+    });
+
+    const session = createSessionForTest({
+      agentManager: {
+        getAgent: vi.fn(() => null),
+        detachAgent,
+        // Another live agent shares the workspace: the SUB label stays.
+        listAgents: vi.fn(() => [
+          { id: "child-agent", workspaceId: "workspace-child" },
+          { id: "sibling-agent", workspaceId: "workspace-child" },
+        ]),
+      },
+      agentStorage: {
+        list: vi.fn().mockResolvedValue([]),
+        get: vi.fn().mockResolvedValue(null),
+      },
+      workspaceLabelService: { setAssignment } as unknown as WorkspaceLabelService,
+    });
+
+    await session.handleMessage({
+      type: "agent.detach.request",
+      agentId: "child-agent",
+      requestId: "detach-sub-2",
+    });
+
+    expect(setAssignment).not.toHaveBeenCalled();
   });
 });
 
