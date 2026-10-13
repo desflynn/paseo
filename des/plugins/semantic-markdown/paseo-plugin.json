@@ -1,5 +1,5 @@
 {
-  "id": "semantic-markdown",
+  "id": "semantic-markdown-alpha",
   "description": "Renders assistant markdown with full Paseo 0.9.2 parity plus semantic tags, foldable callouts, math, footnotes, and kbd keys.",
   "requirements": {
     "paseo": ">=0.9.2"
