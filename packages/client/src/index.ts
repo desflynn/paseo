@@ -183,6 +183,8 @@ export interface PaseoWorkspaceHandle {
   refresh(options?: { requestId?: string }): Promise<PaseoWorkspace | null>;
   setTitle(title: string | null, requestId?: string): Promise<{ title: string | null }>;
   archive(requestId?: string): Promise<PaseoWorkspaceArchiveResult>;
+  /** Restores this archived workspace through the daemon recovery RPC. */
+  restore(requestId?: string): Promise<void>;
   /**
    * Subscribes to already-emitted daemon workspace_update events for this id.
    * This returns a local unsubscribe function; it does not own app cache state or
@@ -215,6 +217,8 @@ export interface PaseoWorkspaceActions {
     workspace: string | PaseoWorkspaceHandle,
     requestId?: string,
   ): Promise<PaseoWorkspaceArchiveResult>;
+  /** Restores an archived workspace through the daemon recovery RPC. */
+  restore(workspace: string | PaseoWorkspaceHandle, requestId?: string): Promise<void>;
   /**
    * Local event subscription over the low-level driver's workspace_update stream.
    * The returned function only removes this SDK listener.
@@ -375,6 +379,12 @@ export interface PaseoAgentHandle {
    */
   commands(options?: PaseoAgentCommandsOptions): Promise<PaseoAgentCommandsResult>;
   archive(): Promise<{ archivedAt: string }>;
+  /**
+   * Unarchives this agent by asking the daemon to refresh it from persistence,
+   * the same RPC the app's own Unarchive button uses. Resolves when the
+   * daemon confirms the refreshed snapshot.
+   */
+  unarchive(requestId?: string): Promise<void>;
   detach(): Promise<void>;
   subscribe(handler: (update: PaseoAgentUpdate) => void): () => void;
 }
@@ -720,6 +730,8 @@ export function createPaseoApi(
       },
       archive: (workspace, requestId) =>
         daemonClient.archiveWorkspace(resolveWorkspaceId(workspace), requestId),
+      restore: (workspace, requestId) =>
+        daemonClient.restoreWorkspace(resolveWorkspaceId(workspace), requestId),
       subscribe: listenWorkspaces,
     },
     agents: {
@@ -837,6 +849,7 @@ function createWorkspaceHandleFactory(
         }
         return result;
       },
+      restore: (requestId) => daemonClient.restoreWorkspace(id, requestId),
       subscribe: (handler) =>
         listen((update) => {
           if (update.kind === "upsert" && update.workspace.id === id) {
@@ -972,6 +985,12 @@ function createAgentHandleFactory(
           current = { ...current, archivedAt: result.archivedAt };
         }
         return result;
+      },
+      unarchive: async (requestId) => {
+        await daemonClient.refreshAgent(id, requestId);
+        if (current) {
+          current = { ...current, archivedAt: null };
+        }
       },
       detach: async () => {
         await daemonClient.detachAgent(id);

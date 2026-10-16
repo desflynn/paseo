@@ -156,12 +156,15 @@ export function workspaceIdsForProjects(
 function activeWorkspaceRecords(
   workspaces: PersistedWorkspaceRecord[],
   projects: PersistedProjectRecord[],
+  options?: { includeArchived?: boolean },
 ): PersistedWorkspaceRecord[] {
   const archivedProjects = new Set(
     projects.filter((project) => project.archivedAt).map((project) => project.projectId),
   );
   return workspaces.filter(
-    (workspace) => !workspace.archivedAt && !archivedProjects.has(workspace.projectId),
+    (workspace) =>
+      (options?.includeArchived || !workspace.archivedAt) &&
+      !archivedProjects.has(workspace.projectId),
   );
 }
 
@@ -215,6 +218,7 @@ export class WorkspaceDirectory {
   async buildDescriptorMap(options: {
     includeGitData: boolean;
     workspaceIds?: Iterable<string>;
+    includeArchivedWorkspaces?: boolean;
   }): Promise<Map<string, WorkspaceDescriptorPayload>> {
     const [
       agents,
@@ -235,7 +239,9 @@ export class WorkspaceDirectory {
         .filter((project) => !project.archivedAt)
         .map((project) => [project.projectId, project] as const),
     );
-    const activeRecords = activeWorkspaceRecords(persistedWorkspaces, persistedProjects);
+    const activeRecords = activeWorkspaceRecords(persistedWorkspaces, persistedProjects, {
+      includeArchived: options.includeArchivedWorkspaces,
+    });
     const descriptorsByWorkspaceId = new Map<string, WorkspaceDescriptorPayload>();
     const workspaceIds = options.workspaceIds ? new Set(options.workspaceIds) : null;
     const activeWorkspaceIds = new Set(activeRecords.map((workspace) => workspace.workspaceId));
@@ -596,11 +602,14 @@ export class WorkspaceDirectory {
     }));
   }
 
-  async listDescriptors(): Promise<WorkspaceDescriptorPayload[]> {
+  async listDescriptors(options?: {
+    includeArchivedWorkspaces?: boolean;
+  }): Promise<WorkspaceDescriptorPayload[]> {
     return Array.from(
       (
         await this.buildDescriptorMap({
           includeGitData: true,
+          includeArchivedWorkspaces: options?.includeArchivedWorkspaces,
         })
       ).values(),
     );
@@ -639,7 +648,9 @@ export class WorkspaceDirectory {
   }> {
     const filter = request.filter;
     const sort = this.pager.normalizeSort(request.sort);
-    let entries = await this.listDescriptors();
+    let entries = await this.listDescriptors({
+      includeArchivedWorkspaces: filter?.includeArchived ?? false,
+    });
     const listedCount = entries.length;
     entries = entries.filter((workspace) => this.matchesFilter({ workspace, filter }));
     const filteredCount = entries.length;

@@ -620,6 +620,50 @@ describe("WorkspaceDirectory empty projects", () => {
     ]);
   });
 
+  test("includeArchived lists archived workspaces alongside active ones", async () => {
+    const directory = makeDirectory({
+      projects: [project({ projectId: "p1" })],
+      workspaces: [
+        {
+          workspaceId: "ws-active",
+          projectId: "p1",
+          cwd: "/workspace/project/active",
+          kind: "local_checkout",
+          displayName: "active",
+          createdAt: NOW,
+          updatedAt: NOW,
+          archivedAt: null,
+        },
+        {
+          workspaceId: "ws-archived",
+          projectId: "p1",
+          cwd: "/workspace/project/archived",
+          kind: "local_checkout",
+          displayName: "archived",
+          createdAt: NOW,
+          updatedAt: NOW,
+          archivedAt: "2026-04-01T00:00:00.000Z",
+        },
+      ],
+    });
+
+    const activeOnly = await directory.listFetchEntries({
+      type: "fetch_workspaces_request",
+      requestId: "r-active",
+    });
+    expect(activeOnly.entries.map((entry) => entry.id)).toEqual(["ws-active"]);
+
+    const withArchived = await directory.listFetchEntries({
+      type: "fetch_workspaces_request",
+      requestId: "r-archived",
+      filter: { includeArchived: true },
+    });
+    expect(withArchived.entries.map((entry) => entry.id).sort()).toEqual([
+      "ws-active",
+      "ws-archived",
+    ]);
+  });
+
   test("excludes projects that still have an active workspace", async () => {
     const directory = makeDirectory({
       projects: [project({ projectId: "with-ws" }), project({ projectId: "empty" })],

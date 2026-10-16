@@ -1276,6 +1276,8 @@ export const FetchWorkspacesRequestMessageSchema = z.object({
       projectId: z.string().optional(),
       // Unused: accepted so older clients still parse, but the server does not filter on it.
       idPrefix: z.string().optional(),
+      // When true, archived workspaces are listed alongside active ones.
+      includeArchived: z.boolean().optional(),
     })
     .optional(),
   sort: z

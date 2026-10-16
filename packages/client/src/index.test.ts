@@ -925,6 +925,90 @@ test("agent handles delegate create, send, timeline refetch, archive, and local 
   await client.close();
 });
 
+test("workspace restore, archived listing, and agent unarchive reach the daemon RPCs", async () => {
+  const { client, ws } = await connectClient();
+
+  const restorePromise = client.workspaces.restore("ws_sdk", "restore-request");
+  const restoreRequest = parseSentSessionMessage(ws.sent.at(-1));
+  expect(restoreRequest).toMatchObject({
+    type: "workspace.recovery.restore.request",
+    workspaceId: "ws_sdk",
+    requestId: "restore-request",
+  });
+  ws.message(
+    sessionMessage({
+      type: "workspace.recovery.restore.response",
+      payload: {
+        requestId: restoreRequest.requestId,
+        workspaceId: "ws_sdk",
+        accepted: true,
+        error: null,
+      },
+    }),
+  );
+  await expect(restorePromise).resolves.toBeUndefined();
+
+  const handlePromise = client.workspaces.ref("ws_sdk").restore("restore-handle");
+  const handleRequest = parseSentSessionMessage(ws.sent.at(-1));
+  expect(handleRequest).toMatchObject({
+    type: "workspace.recovery.restore.request",
+    workspaceId: "ws_sdk",
+  });
+  ws.message(
+    sessionMessage({
+      type: "workspace.recovery.restore.response",
+      payload: {
+        requestId: handleRequest.requestId,
+        workspaceId: "ws_sdk",
+        accepted: true,
+        error: null,
+      },
+    }),
+  );
+  await handlePromise;
+
+  const listPromise = client.workspaces.list({ filter: { includeArchived: true } });
+  const listRequest = parseSentSessionMessage(ws.sent.at(-1));
+  expect(listRequest).toMatchObject({
+    type: "fetch_workspaces_request",
+    filter: { includeArchived: true },
+  });
+  ws.message(
+    sessionMessage({
+      type: "fetch_workspaces_response",
+      payload: {
+        requestId: listRequest.requestId,
+        entries: [],
+        pageInfo: { nextCursor: null, prevCursor: null, hasMore: false },
+      },
+    }),
+  );
+  await listPromise;
+
+  const agent = client.agents.ref("agent_sdk");
+  const unarchivePromise = agent.unarchive("unarchive-request");
+  const unarchiveRequest = parseSentSessionMessage(ws.sent.at(-1));
+  expect(unarchiveRequest).toMatchObject({
+    type: "refresh_agent_request",
+    agentId: "agent_sdk",
+    requestId: "unarchive-request",
+  });
+  ws.message(
+    sessionMessage({
+      type: "status",
+      payload: {
+        status: "agent_refreshed",
+        requestId: unarchiveRequest.requestId,
+        agentId: "agent_sdk",
+        agent: createAgent(),
+      },
+    }),
+  );
+  await unarchivePromise;
+
+  await client.close();
+});
+
 test("agent handles list the session's own commands through the existing daemon RPC", async () => {
   const { client, ws } = await connectClient();
   const agent = client.agents.ref("agent_sdk");
