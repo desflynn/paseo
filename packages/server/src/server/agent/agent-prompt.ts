@@ -7,6 +7,7 @@ import type {
 } from "./agent-sdk-types.js";
 import type { AgentManager, ManagedAgent } from "./agent-manager.js";
 import type { AgentStorage } from "./agent-storage.js";
+import type { AgentTimelineRow } from "./agent-timeline-store-types.js";
 import { ensureAgentLoaded } from "./agent-loading.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
@@ -206,6 +207,75 @@ export async function unarchiveAgentState(
   return true;
 }
 
+const COMPACTION_TAIL_WINDOW_MS = 30 * 60 * 1000;
+
+/** What a sender is told when its target is mid-compact (o175). */
+export const TARGET_COMPACTING_CODE = "TARGET_COMPACTING";
+export const TARGET_COMPACTING_GUIDANCE =
+  "NOTHING was delivered; wake yourself for about 4 minutes with paseo_wake_me, then send the same message again. Any send cancels the compaction.";
+
+export class TargetCompactingError extends Error {
+  readonly code = TARGET_COMPACTING_CODE;
+  constructor() {
+    super(TARGET_COMPACTING_GUIDANCE);
+    this.name = "TargetCompactingError";
+  }
+}
+
+/**
+ * A message must never trample a compaction: a send that lands while the
+ * target is compacting cancels it, so the daemon refuses instead. The tail is
+ * mid-compact when its newest compaction row is still loading, is no older
+ * than 30 minutes, and no non-compaction row follows it. Mirrors the
+ * sender-side detector in dci-harness dev/src/paseo-bridge/agent-compaction.ts
+ * (isCompactingFromTimeline).
+ */
+export function isCompactingTimelineTail(rows: AgentTimelineRow[]): boolean {
+  let latestCompactionIndex = -1;
+  let latestStatus: unknown;
+  let latestTimestamp: unknown;
+  let latestNonCompactionIndex = -1;
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row.item?.type === "compaction") {
+      latestCompactionIndex = index;
+      latestStatus = row.item.status;
+      latestTimestamp = row.timestamp;
+    } else {
+      latestNonCompactionIndex = index;
+    }
+  }
+  if (
+    latestCompactionIndex === -1 ||
+    latestStatus !== "loading" ||
+    latestNonCompactionIndex > latestCompactionIndex ||
+    typeof latestTimestamp !== "string"
+  ) {
+    return false;
+  }
+  const timestamp = Date.parse(latestTimestamp);
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= COMPACTION_TAIL_WINDOW_MS;
+}
+
+async function refuseIfTargetCompacting(params: {
+  agentManager: { getTimelineRows(agentId: string): Promise<AgentTimelineRow[]> };
+  agentId: string;
+  logger: Logger;
+}): Promise<void> {
+  try {
+    const rows = await params.agentManager.getTimelineRows(params.agentId);
+    if (isCompactingTimelineTail(rows.slice(-25))) {
+      throw new TargetCompactingError();
+    }
+  } catch (error) {
+    if (error instanceof TargetCompactingError) throw error;
+    params.logger.warn(
+      { err: error, agentId: params.agentId },
+      "Compaction guard timeline read failed; failing open",
+    );
+  }
+}
+
 /**
  * Wrap a body in <paseo-system>…</paseo-system> so the receiving agent
  * recognizes the prompt as system-injected context — not a user turn.
@@ -306,6 +376,14 @@ export async function waitForAgentRunStartWithTimeout(
 export async function sendPromptToAgent(
   params: SendPromptToAgentParams,
 ): Promise<{ disposition: PromptDispatchDisposition }> {
+  // The compaction guard runs before anything else so no surface (app send,
+  // CLI, agent MCP tool) can trample a running compaction.
+  await refuseIfTargetCompacting({
+    agentManager: params.agentManager,
+    agentId: params.agentId,
+    logger: params.logger,
+  });
+
   const unarchive = params.unarchive ?? true;
 
   const record = await params.agentStorage.get(params.agentId);

@@ -4933,6 +4933,7 @@ export const SendAgentMessageResponseMessageSchema = z.object({
     agentId: z.string(),
     accepted: z.boolean(),
     error: z.string().nullable(),
+    code: z.string().nullable().optional(),
   }),
 });
 

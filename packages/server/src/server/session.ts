@@ -61,6 +61,8 @@ import {
   sendPromptToAgent,
   waitForAgentRunStartWithTimeout,
   unarchiveAgentState,
+  TargetCompactingError,
+  TARGET_COMPACTING_CODE,
 } from "./agent/agent-prompt.js";
 import {
   resolveCreateAgentTitles,
@@ -8203,6 +8205,7 @@ export class Session {
           agentId: resolved.agentId,
           accepted: false,
           error: errorToFriendlyMessage(error),
+          ...(error instanceof TargetCompactingError ? { code: TARGET_COMPACTING_CODE } : {}),
         },
       });
     }

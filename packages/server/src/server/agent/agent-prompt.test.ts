@@ -10,10 +10,14 @@ import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import {
   formatSystemNotificationPrompt,
+  isCompactingTimelineTail,
   isSystemInjectedEnvelope,
+  sendPromptToAgent,
   setupFinishNotification,
+  TargetCompactingError,
   waitForAgentRunStartWithTimeout,
 } from "./agent-prompt.js";
+import type { AgentTimelineRow } from "./agent-timeline-store-types.js";
 import type { AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
 import type {
   AgentClient,
@@ -761,4 +765,88 @@ test("waiting for a run start still gives up at the run start budget", async () 
     vi.useRealTimers();
     await scenario.cleanup();
   }
+});
+
+describe("compaction guard (o175: a message must never trample a compaction)", () => {
+  const row = (item: { type: string; status?: string }, timestamp: string): AgentTimelineRow =>
+    ({ seq: 1, timestamp, item }) as AgentTimelineRow;
+
+  const loadingCompaction = (ageMinutes: number): AgentTimelineRow =>
+    row(
+      { type: "compaction", status: "loading" },
+      new Date(Date.now() - ageMinutes * 60_000).toISOString(),
+    );
+
+  test("a recent loading compaction as the tail row is mid-compact", () => {
+    expect(
+      isCompactingTimelineTail([
+        row({ type: "assistant_message" }, "2026-01-01T00:00:00.000Z"),
+        loadingCompaction(1),
+      ]),
+    ).toBe(true);
+  });
+
+  test("a completed compaction is not mid-compact", () => {
+    expect(
+      isCompactingTimelineTail([
+        row({ type: "compaction", status: "completed" }, new Date().toISOString()),
+      ]),
+    ).toBe(false);
+  });
+
+  test("a loading compaction with later activity is not mid-compact", () => {
+    expect(
+      isCompactingTimelineTail([
+        loadingCompaction(1),
+        row({ type: "assistant_message" }, new Date().toISOString()),
+      ]),
+    ).toBe(false);
+  });
+
+  test("a loading compaction older than 30 minutes is not mid-compact", () => {
+    expect(isCompactingTimelineTail([loadingCompaction(31)])).toBe(false);
+  });
+
+  test("no compaction rows is not mid-compact", () => {
+    expect(
+      isCompactingTimelineTail([row({ type: "assistant_message" }, new Date().toISOString())]),
+    ).toBe(false);
+  });
+
+  test("sendPromptToAgent refuses before loading the agent, and fails open on a timeline read error", async () => {
+    const getAgent = vi.fn();
+    const agentManager = {
+      getAgent,
+      getTimelineRows: vi.fn(async () => [loadingCompaction(0.5)]),
+    };
+
+    await expect(
+      sendPromptToAgent({
+        agentManager: agentManager as never,
+        agentStorage: { get: vi.fn(async () => null) } as never,
+        agentId: "agent-1",
+        prompt: { type: "text", text: "hello" } as never,
+        logger: createTestLogger(),
+      }),
+    ).rejects.toBeInstanceOf(TargetCompactingError);
+    expect(getAgent).not.toHaveBeenCalled();
+
+    // Fail open: a timeline read error must not block the send (it proceeds
+    // past the guard and fails later on the stub manager, not on the guard).
+    const failingManager = {
+      getAgent,
+      getTimelineRows: vi.fn(async () => {
+        throw new Error("timeline store unavailable");
+      }),
+    };
+    await expect(
+      sendPromptToAgent({
+        agentManager: failingManager as never,
+        agentStorage: { get: vi.fn(async () => null) } as never,
+        agentId: "agent-1",
+        prompt: { type: "text", text: "hello" } as never,
+        logger: createTestLogger(),
+      }),
+    ).rejects.not.toBeInstanceOf(TargetCompactingError);
+  });
 });

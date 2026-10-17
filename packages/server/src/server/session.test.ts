@@ -26,7 +26,7 @@ import { Session } from "./session.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
 import { StructuredAgentFallbackError } from "./agent/agent-response-loop.js";
-import { sendPromptToAgent } from "./agent/agent-prompt.js";
+import { sendPromptToAgent, TargetCompactingError } from "./agent/agent-prompt.js";
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
 import type { AgentManagerEvent } from "./agent/agent-manager.js";
 import type { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
@@ -6054,6 +6054,31 @@ describe("owner MINE workspace label overlay", () => {
     expect(
       response && response.type === "send_agent_message_response" && response.payload.accepted,
     ).toBe(true);
+  });
+
+  test("a send to a mid-compact target is refused with TARGET_COMPACTING", async () => {
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({
+      messages,
+      agentStorage: {
+        list: vi.fn().mockResolvedValue([storedAgent()]),
+        get: vi.fn().mockResolvedValue(storedAgent()),
+      },
+    });
+    vi.mocked(sendPromptToAgent).mockRejectedValue(new TargetCompactingError());
+
+    await session.handleMessage(sendRequest("request-compacting"));
+
+    const response = messages.find((message) => message.type === "send_agent_message_response");
+    expect(
+      response && response.type === "send_agent_message_response" && response.payload.accepted,
+    ).toBe(false);
+    expect(
+      response && response.type === "send_agent_message_response" && response.payload.code,
+    ).toBe("TARGET_COMPACTING");
+    expect(
+      response && response.type === "send_agent_message_response" && response.payload.error,
+    ).toContain("NOTHING was delivered");
   });
 
   test("a cli session sending a message does not label the workspace MINE", async () => {
