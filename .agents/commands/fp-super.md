@@ -1,1 +1,1 @@
-/Users/des/dev/flight-plan/commands/fp-super.md
+/Users/des/dev/dci-harness/.agents/commands/fp-super.md

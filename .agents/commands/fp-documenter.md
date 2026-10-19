@@ -1,1 +1,1 @@
-/Users/des/dev/flight-plan/commands/fp-documenter.md
+/Users/des/dev/dci-harness/.agents/commands/fp-documenter.md

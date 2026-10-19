@@ -1,1 +1,1 @@
-/Users/des/dev/flight-plan/commands/fp-tester.md
+/Users/des/dev/dci-harness/.agents/commands/fp-tester.md

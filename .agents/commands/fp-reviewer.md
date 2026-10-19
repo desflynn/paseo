@@ -1,1 +1,1 @@
-/Users/des/dev/flight-plan/commands/fp-reviewer.md
+/Users/des/dev/dci-harness/.agents/commands/fp-reviewer.md

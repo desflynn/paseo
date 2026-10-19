@@ -1,1 +1,1 @@
-/Users/des/dev/flight-plan/commands/fta.md
+/Users/des/dev/dci-harness/.agents/commands/fta.md
