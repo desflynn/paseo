@@ -1,1 +1,1 @@
-/Users/des/dev/dci-harness/.agents/commands/fp-super.md
+/Users/des/.dci/commands/fp-super.md

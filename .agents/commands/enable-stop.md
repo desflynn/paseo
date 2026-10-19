@@ -1,1 +1,1 @@
-/opt/homebrew/lib/node_modules/dci-harness/.agents/commands/enable-stop.md
+/Users/des/.dci/commands/enable-stop.md

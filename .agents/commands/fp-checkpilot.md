@@ -1,1 +1,1 @@
-/Users/des/dev/dci-harness/.agents/commands/fp-checkpilot.md
+/Users/des/.dci/commands/fp-checkpilot.md

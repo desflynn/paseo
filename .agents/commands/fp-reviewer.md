@@ -1,1 +1,1 @@
-/Users/des/dev/dci-harness/.agents/commands/fp-reviewer.md
+/Users/des/.dci/commands/fp-reviewer.md

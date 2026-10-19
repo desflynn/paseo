@@ -1,1 +1,1 @@
-/Users/des/dev/dci-harness/.agents/commands/fta.md
+/Users/des/.dci/commands/fta.md

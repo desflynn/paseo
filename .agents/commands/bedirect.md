@@ -1,1 +1,1 @@
-/opt/homebrew/lib/node_modules/dci-harness/.agents/commands/bedirect.md
+/Users/des/.dci/commands/bedirect.md

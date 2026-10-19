@@ -1,1 +1,1 @@
-/opt/homebrew/lib/node_modules/dci-harness/.agents/commands/dci-ingest.md
+/Users/des/.dci/commands/dci-ingest.md

@@ -1,1 +1,1 @@
-/opt/homebrew/lib/node_modules/dci-harness/.agents/commands/skip-stop.md
+/Users/des/.dci/commands/skip-stop.md

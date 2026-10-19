@@ -1,1 +1,1 @@
-/Users/des/dev/dci-harness/.agents/commands/fp-worker.md
+/Users/des/.dci/commands/fp-worker.md

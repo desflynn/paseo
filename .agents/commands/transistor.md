@@ -1,1 +1,1 @@
-/opt/homebrew/lib/node_modules/dci-harness/.agents/commands/transistor.md
+/Users/des/.dci/commands/transistor.md

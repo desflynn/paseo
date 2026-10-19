@@ -1,1 +1,1 @@
-/Users/des/dev/dci-harness/.agents/commands/fp-tester.md
+/Users/des/.dci/commands/fp-tester.md
