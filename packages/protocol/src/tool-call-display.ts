@@ -149,16 +149,35 @@ function buildUnknownDetailOverride(input: ToolCallDisplayInput): DetailDisplay 
   return {};
 }
 
+function buildAgentMessageModel(
+  agentMessage: NonNullable<ToolCallTimelineItem["agentMessage"]>,
+  errorText: string | undefined,
+): ToolCallDisplayModel {
+  const display = buildAgentMessageDisplay(agentMessage);
+  return {
+    displayName: display.displayName,
+    ...(display.summary ? { summary: display.summary } : {}),
+    ...(errorText ? { errorText } : {}),
+  };
+}
+
 export function buildToolCallDisplayModel(input: ToolCallDisplayInput): ToolCallDisplayModel {
   const errorText = input.status === "failed" ? formatErrorText(input.error) : undefined;
-  const paseoDisplay = input.agentMessage
-    ? buildAgentMessageDisplay(input.agentMessage)
-    : buildPaseoToolDisplay({
-        toolName: input.name,
-        detail: input.detail,
-        targetAgentTitle: input.targetAgentTitle,
-      });
-  if (paseoDisplay) {
+  if (input.agentMessage) {
+    return buildAgentMessageModel(input.agentMessage, errorText);
+  }
+  // An explicit label from the provider (the Pi MCP adapter's "Server > Action")
+  // leads; the Paseo presentation catalog is the ordinary mapping beneath it,
+  // so a cataloged Paseo tool name can never bury a carried label.
+  const explicitLabel = isRecord(input.metadata)
+    ? readString(input.metadata.toolDisplayName)
+    : undefined;
+  const paseoDisplay = buildPaseoToolDisplay({
+    toolName: input.name,
+    detail: input.detail,
+    targetAgentTitle: input.targetAgentTitle,
+  });
+  if (paseoDisplay && !explicitLabel) {
     return {
       displayName: paseoDisplay.displayName,
       ...(paseoDisplay.summary ? { summary: paseoDisplay.summary } : {}),
@@ -168,11 +187,13 @@ export function buildToolCallDisplayModel(input: ToolCallDisplayInput): ToolCall
   const canonicalDisplay = buildCanonicalDetailDisplay(input);
   const unknownDetailOverride = buildUnknownDetailOverride(input);
   const displayName =
-    (isRecord(input.metadata) ? readString(input.metadata.toolDisplayName) : undefined) ??
+    explicitLabel ??
     unknownDetailOverride.displayName ??
+    paseoDisplay?.displayName ??
     canonicalDisplay.displayName ??
     humanizeToolName(input.name);
-  const summary = unknownDetailOverride.summary ?? canonicalDisplay.summary;
+  const summary =
+    unknownDetailOverride.summary ?? paseoDisplay?.summary ?? canonicalDisplay.summary;
 
   return {
     displayName,
