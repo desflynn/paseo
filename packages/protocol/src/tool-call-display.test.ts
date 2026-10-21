@@ -18,6 +18,30 @@ describe("shared tool-call display mapping", () => {
     },
   );
 
+  it("gives a cataloged Paseo tool its catalog label when no explicit label is carried", () => {
+    expect(
+      buildToolCallDisplayModel({
+        name: "paseo.list_agents",
+        status: "running",
+        error: null,
+        detail: { type: "unknown", input: {}, output: null },
+      }).displayName,
+    ).toBe("List agents");
+  });
+
+  it("keeps the catalog context under an explicit label", () => {
+    const display = buildToolCallDisplayModel({
+      name: "paseo.create_agent",
+      status: "running",
+      error: null,
+      metadata: { toolDisplayName: "Paseo > Create Agent" },
+      detail: { type: "unknown", input: { title: "Dave" }, output: null },
+    });
+
+    expect(display.displayName).toBe("Paseo > Create Agent");
+    expect(display.summary).toBe("Dave");
+  });
+
   it("builds summary from canonical detail", () => {
     const display = buildToolCallDisplayModel({
       name: "read_file",
