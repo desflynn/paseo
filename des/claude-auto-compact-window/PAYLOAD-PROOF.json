@@ -1,0 +1,11 @@
+{
+  "source": "/Applications/Paseo.app/Contents/Resources/app.asar",
+  "output": ".dev/claude-auto-compact-window/backend-only.asar",
+  "sourceSha256": "9253ff529962205c3ee138616da7bc75800a9797b28e644f69087149cb9c9a6f",
+  "outputSha256": "b747e6ca1c6afa918533625b3a5c6d54db7dc81f0a1d31583f73396f96004329",
+  "changedFile": "node_modules/@getpaseo/server/dist/server/server/agent/providers/claude/agent.js",
+  "replacementSha256": "600a95e3704fcb77f9731057a9548106c7a0865d769d78868923aaa43162cc3c",
+  "allOtherMetadataAndPackedBytesPreserved": true,
+  "unpackedTreeUntouched": true,
+  "installedArchiveUnchanged": true
+}

@@ -1,0 +1,7 @@
+{
+  "id": "render-probe",
+  "description": "Probe: Paseo highlighter, native Mermaid WebView, and app syntax theme inside a plugin.",
+  "requirements": {
+    "paseo": ">=0.9.2"
+  }
+}

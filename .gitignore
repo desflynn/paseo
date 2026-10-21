@@ -98,3 +98,15 @@ app.json
 
 # Project-local Serena configuration and memories.
 .serena/
+
+# DCI harness bridge files, written per machine (hooks are symlinks into dci-harness dist)
+.codex/config.toml
+.codex/hooks.json
+.codex/hooks/
+.pi/mcp.json
+
+# Dated config backups and one-off snapshots left by upgrades (tracked ones stay tracked)
+*.bak-*
+.claude/skills.bak-*/
+des/upgrade-0.10.3/CLAUDE.before-upgrade.md
+.claude/handoffs/2026-10-07-paseo-fixer-guy.md

@@ -1,0 +1,420 @@
+diff --git a/packages/app/e2e/browser/tool-call-overview-sheet.spec.ts b/packages/app/e2e/browser/tool-call-overview-sheet.spec.ts
+index dcb538945..61f292a03 100644
+--- a/packages/app/e2e/browser/tool-call-overview-sheet.spec.ts
++++ b/packages/app/e2e/browser/tool-call-overview-sheet.spec.ts
+@@ -261,6 +261,43 @@ test.describe("compact overview tool calls", () => {
+   });
+ });
+ 
++test("preserves server and action labels in tool-call badges", async ({ page }, testInfo) => {
++  const agent = await createOverviewAgent(page, "Pi gateway label display");
++  try {
++    await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
++      const server = ws.connectToServer();
++      ws.onMessage((message) => server.send(message));
++      server.onMessage((message) => {
++        if (!getToolCallStatus(message, agent.agentId)) {
++          ws.send(message);
++          return;
++        }
++        const raw = typeof message === "string" ? message : message.toString("utf8");
++        const envelope = JSON.parse(raw);
++        const item = envelope.message.payload.event.item;
++        item.name = "paseo.list_agents";
++        item.metadata = { ...item.metadata, toolDisplayName: "Paseo > Get Agents" };
++        item.detail = { type: "unknown", input: {}, output: null };
++        ws.send(JSON.stringify(envelope));
++      });
++    });
++    await openOverviewAgent(page, agent);
++    await agent.client.sendAgentMessage(agent.agentId, "Show the gateway tool label.");
++    const group = page.getByTestId("tool-call-group").first();
++    await expect(group).toBeVisible();
++    await group.click();
++    const badge = group.getByTestId("tool-call-badge").first();
++    await expect(badge).toContainText("Paseo > Get Agents");
++    await expect(group).toContainText(/called Paseo/i);
++    await testInfo.attach("pi-mcp-server-action-label", {
++      body: await page.screenshot({ path: "/tmp/paseo-0103-pi-label.png" }),
++      contentType: "image/png",
++    });
++  } finally {
++    await agent.cleanup();
++  }
++});
++
+ test("keeps overview tool calls inline on desktop", async ({ page }) => {
+   test.setTimeout(120_000);
+   const agent = await createOverviewAgent(page, "Desktop overview tool calls");
+diff --git a/packages/protocol/src/tool-call-display.test.ts b/packages/protocol/src/tool-call-display.test.ts
+index 0dd49eba0..7c4285420 100644
+--- a/packages/protocol/src/tool-call-display.test.ts
++++ b/packages/protocol/src/tool-call-display.test.ts
+@@ -3,6 +3,21 @@ import { describe, expect, it } from "vitest";
+ import { buildToolCallDisplayModel } from "./tool-call-display.js";
+ 
+ describe("shared tool-call display mapping", () => {
++  it.each(["Paseo > Get Agents", "Flight-plan > Prefill", "Gateway > Search Tools"])(
++    "preserves the server and action label %s",
++    (name) => {
++      expect(
++        buildToolCallDisplayModel({
++          name: "paseo.list_agents",
++          status: "running",
++          error: null,
++          metadata: { toolDisplayName: name },
++          detail: { type: "unknown", input: {}, output: null },
++        }).displayName,
++      ).toBe(name);
++    },
++  );
++
+   it("builds summary from canonical detail", () => {
+     const display = buildToolCallDisplayModel({
+       name: "read_file",
+diff --git a/packages/protocol/src/tool-call-display.ts b/packages/protocol/src/tool-call-display.ts
+index 6930fe187..b7721ee86 100644
+--- a/packages/protocol/src/tool-call-display.ts
++++ b/packages/protocol/src/tool-call-display.ts
+@@ -154,6 +154,7 @@ export function buildToolCallDisplayModel(input: ToolCallDisplayInput): ToolCall
+   const canonicalDisplay = buildCanonicalDetailDisplay(input);
+   const unknownDetailOverride = buildUnknownDetailOverride(input);
+   const displayName =
++    (isRecord(input.metadata) ? readString(input.metadata.toolDisplayName) : undefined) ??
+     unknownDetailOverride.displayName ??
+     canonicalDisplay.displayName ??
+     humanizeToolName(input.name);
+diff --git a/packages/server/src/server/agent/providers/pi/extensions/contract.ts b/packages/server/src/server/agent/providers/pi/extensions/contract.ts
+index 93129a047..9d68828af 100644
+--- a/packages/server/src/server/agent/providers/pi/extensions/contract.ts
++++ b/packages/server/src/server/agent/providers/pi/extensions/contract.ts
+@@ -19,6 +19,8 @@ export interface PiExtensionToolCall {
+ 
+ export interface PiExtensionToolMapping {
+   name?: string;
++  /** User-facing label; name remains the canonical tool identity. */
++  displayName?: string;
+   detail?: ToolCallDetail;
+   timeline?: AgentTimelineItem[];
+   subagents?: ProviderSubagentInputEvent[];
+diff --git a/packages/server/src/server/agent/providers/pi/extensions/pi-mcp-adapter/index.test.ts b/packages/server/src/server/agent/providers/pi/extensions/pi-mcp-adapter/index.test.ts
+index 5316d6f6b..c5bc8a73f 100644
+--- a/packages/server/src/server/agent/providers/pi/extensions/pi-mcp-adapter/index.test.ts
++++ b/packages/server/src/server/agent/providers/pi/extensions/pi-mcp-adapter/index.test.ts
+@@ -17,7 +17,7 @@ function mapping(toolCall: PiTrackedToolCall, result: PiToolResult) {
+   });
+ }
+ function resolveToolCallName(toolCall: PiTrackedToolCall, result: PiToolResult) {
+-  return mapping(toolCall, result)?.name ?? toolCall.toolName;
++  return mapping(toolCall, result)?.displayName ?? toolCall.toolName;
+ }
+ 
+ describe("pi-mcp-adapter adapter", () => {
+@@ -27,7 +27,8 @@ describe("pi-mcp-adapter adapter", () => {
+       args: '{"provider":"pi"}',
+     });
+ 
+-    expect(resolveToolCallName(toolCall, null)).toBe("paseo.list_models");
++    expect(resolveToolCallName(toolCall, null)).toBe("Paseo > List Models");
++    expect(mapping(toolCall, null)?.name).toBe("paseo.list_models");
+   });
+ 
+   test("normalizes Pi MCP proxy calls from result details when completed", () => {
+@@ -44,6 +45,53 @@ describe("pi-mcp-adapter adapter", () => {
+       },
+     });
+ 
+-    expect(resolveToolCallName(toolCall, result)).toBe("paseo.list_models");
++    expect(resolveToolCallName(toolCall, result)).toBe("Paseo > List Models");
++    expect(mapping(toolCall, result)?.name).toBe("paseo.list_models");
++  });
++
++  test.each([
++    [{ server: "paseo", tool: "paseo_list_agents" }, "Paseo > Get Agents"],
++    [{ server: "flight-plan", tool: "prefill" }, "Flight-plan > Prefill"],
++    [{ tool: "dci_memory_search" }, "Dci > Memory Search"],
++    [{ tool: "prefill" }, "Gateway > Prefill"],
++    [{ search: "agents" }, "Gateway > Search Tools"],
++    [{ search: "agents", server: "paseo" }, "Paseo > Search Tools"],
++    [{ describe: "paseo_list_agents" }, "Paseo > Describe Tool"],
++    [{ connect: "paseo", server: "dci" }, "Paseo > Connect"],
++    [{ server: "paseo" }, "Paseo > List Tools"],
++    [{}, "Gateway > Status"],
++    [{ action: "auth-start", server: "paseo", tool: "dci_memory_search" }, "Paseo > Auth Start"],
++    [{ tool: "paseo_list_agents", connect: "dci" }, "Paseo > Get Agents"],
++    [{ describe: "dci_memory_search", search: "agents" }, "Dci > Describe Tool"],
++  ])("labels gateway request %j as %s", (args, expected) => {
++    expect(resolveToolCallName(parseToolArgs("mcp", args), null)).toBe(expected);
++  });
++
++  test("uses completed server metadata without duplicating the tool prefix", () => {
++    const result = parseToolResult({
++      content: [],
++      details: { mode: "call", server: "flight-plan", tool: "flight-plan_prefill" },
++    });
++    expect(resolveToolCallName(parseToolArgs("mcp", { tool: "prefill" }), result)).toBe(
++      "Flight-plan > Prefill",
++    );
++  });
++
++  test("does not mistake describe metadata for an actual call", () => {
++    const result = parseToolResult({
++      content: [],
++      details: { mode: "describe", server: "paseo", tool: "list_agents" },
++    });
++    expect(
++      resolveToolCallName(parseToolArgs("mcp", { describe: "paseo_list_agents" }), result),
++    ).toBe("Paseo > Describe Tool");
++  });
++
++  test("leaves malformed args and unrelated tools alone", () => {
++    expect(mapping(parseToolArgs("mcp", "invalid"), null)).toBeUndefined();
++    expect(mapping(parseToolArgs("read", { path: "README.md" }), null)).toBeUndefined();
++    expect(resolveToolCallName(parseToolArgs("mcp", { tool: 123, server: false }), null)).toBe(
++      "Gateway > Status",
++    );
+   });
+ });
+diff --git a/packages/server/src/server/agent/providers/pi/extensions/pi-mcp-adapter/index.ts b/packages/server/src/server/agent/providers/pi/extensions/pi-mcp-adapter/index.ts
+index c36e18731..11b0c6ae8 100644
+--- a/packages/server/src/server/agent/providers/pi/extensions/pi-mcp-adapter/index.ts
++++ b/packages/server/src/server/agent/providers/pi/extensions/pi-mcp-adapter/index.ts
+@@ -5,42 +5,93 @@ const Args = z
+   .object({
+     tool: z.string().optional().catch(undefined),
+     server: z.string().optional().catch(undefined),
++    action: z.string().optional().catch(undefined),
++    connect: z.string().optional().catch(undefined),
++    describe: z.string().optional().catch(undefined),
++    search: z.string().optional().catch(undefined),
+   })
+   .passthrough();
+ const Details = z
+   .object({
++    mode: z.string().optional().catch(undefined),
+     server: z.string().optional().catch(undefined),
+     tool: z.string().optional().catch(undefined),
+   })
+   .passthrough();
+ const nonEmpty = (value: string | undefined) => value?.trim() || undefined;
+ 
++function identifyTool(tool: string, server?: string) {
++  if (server) {
++    return {
++      server,
++      tool: tool.startsWith(`${server}_`) ? tool.slice(server.length + 1) : tool,
++    };
++  }
++  const separator = tool.indexOf("_");
++  return separator > 0
++    ? { server: tool.slice(0, separator), tool: tool.slice(separator + 1) }
++    : { server: undefined, tool };
++}
++
++function completedTool(server?: string, tool?: string, mode?: string) {
++  if (!server || !tool || (mode && mode !== "call")) return undefined;
++  return identifyTool(tool, server);
++}
++
++function label(server: string | undefined, action: string) {
++  const serverName = server ?? "Gateway";
++  const actionName = action === "list_agents" ? "get_agents" : action;
++  return {
++    displayName: `${serverName[0].toUpperCase()}${serverName.slice(1)} > ${actionName
++      .replace(/([a-z])([A-Z])/g, "$1 $2")
++      .split(/[._\s-]+/)
++      .filter(Boolean)
++      .map((word) => word[0].toUpperCase() + word.slice(1))
++      .join(" ")}`,
++  };
++}
++
++function toolLabel(resolved: ReturnType<typeof identifyTool>) {
++  return {
++    ...label(resolved.server, resolved.tool),
++    ...(resolved.server ? { name: `${resolved.server}.${resolved.tool}` } : {}),
++  };
++}
++
+ export const piMcpAdapter: PiExtension = {
+   id: "pi-mcp-adapter",
+   createSession: () => ({
+     mapToolCall(call) {
+       if (call.toolName !== "mcp") return undefined;
+-      if (call.result && typeof call.result !== "string") {
+-        const details = Details.safeParse(call.result.details);
+-        if (details.success) {
+-          const server = nonEmpty(details.data.server);
+-          const tool = nonEmpty(details.data.tool);
+-          if (server && tool) return { name: `${server}.${tool}` };
+-        }
+-      }
++      const details = Details.safeParse(
++        call.result && typeof call.result !== "string" ? call.result.details : undefined,
++      );
++      const resultServer = details.success ? nonEmpty(details.data.server) : undefined;
++      const resultTool = details.success ? nonEmpty(details.data.tool) : undefined;
++      const resultMode = details.success ? nonEmpty(details.data.mode) : undefined;
++      const completedCall = completedTool(resultServer, resultTool, resultMode);
+       const args = Args.safeParse(call.args);
+-      if (!args.success) return undefined;
++      if (!args.success) {
++        return completedCall ? toolLabel(completedCall) : undefined;
++      }
++
++      const server = nonEmpty(args.data.server) ?? resultServer;
++      // Match gateway dispatch precedence; describe metadata also contains a tool name.
++      const action = nonEmpty(args.data.action);
++      if (action) return label(server, action);
+       const tool = nonEmpty(args.data.tool);
+-      const server = nonEmpty(args.data.server);
+-      if (tool && server)
+-        return {
+-          name: `${server}.${tool.startsWith(`${server}_`) ? tool.slice(server.length + 1) : tool}`,
+-        };
+       if (tool) {
+-        const [prefix, ...rest] = tool.split("_");
+-        if (prefix && rest.length > 0) return { name: `${prefix}.${rest.join("_")}` };
++        const resolved = completedCall ?? identifyTool(tool, server);
++        return toolLabel(resolved);
+       }
+-      return undefined;
++      const connect = nonEmpty(args.data.connect);
++      if (connect) return label(connect, "Connect");
++      const describe = nonEmpty(args.data.describe);
++      if (describe) return label(server ?? identifyTool(describe).server, "Describe Tool");
++      if (nonEmpty(args.data.search)) return label(server, "Search Tools");
++      if (nonEmpty(args.data.server)) return label(server, "List Tools");
++      if (completedCall) return toolLabel(completedCall);
++      return label(undefined, "Status");
+     },
+   }),
+ };
+diff --git a/packages/server/src/server/agent/providers/pi/history-mapper.test.ts b/packages/server/src/server/agent/providers/pi/history-mapper.test.ts
+index 24d18306b..760ae7099 100644
+--- a/packages/server/src/server/agent/providers/pi/history-mapper.test.ts
++++ b/packages/server/src/server/agent/providers/pi/history-mapper.test.ts
+@@ -45,6 +45,35 @@ describe("Pi history mapper", () => {
+     );
+   });
+ 
++  test("replays MCP labels without changing tool identity", async () => {
++    const events = await collectHistory([
++      {
++        role: "assistant",
++        content: [
++          { type: "toolCall", id: "mcp-1", name: "mcp", arguments: { tool: "paseo_list_agents" } },
++        ],
++      },
++      {
++        role: "toolResult",
++        toolCallId: "mcp-1",
++        toolName: "mcp",
++        content: [],
++        details: { mode: "call", server: "paseo", tool: "list_agents" },
++      },
++    ]);
++    expect(events).toHaveLength(2);
++    for (const event of events) {
++      expect(event).toMatchObject({
++        type: "timeline",
++        item: {
++          type: "tool_call",
++          name: "paseo.list_agents",
++          metadata: { toolDisplayName: "Paseo > Get Agents" },
++        },
++      });
++    }
++  });
++
+   test("replays user, assistant, reasoning, and completed tool calls", async () => {
+     await expect(
+       collectHistory([
+diff --git a/packages/server/src/server/agent/providers/pi/history-mapper.ts b/packages/server/src/server/agent/providers/pi/history-mapper.ts
+index 27a0250b0..5067d9a90 100644
+--- a/packages/server/src/server/agent/providers/pi/history-mapper.ts
++++ b/packages/server/src/server/agent/providers/pi/history-mapper.ts
+@@ -196,6 +196,7 @@ export class PiHistoryMapper {
+             type: "tool_call",
+             callId: this.resolveToolCallId(content.id, tracked),
+             name: mapping?.name ?? tracked.toolName,
++            ...(mapping?.displayName ? { metadata: { toolDisplayName: mapping.displayName } } : {}),
+             status: "running",
+             detail,
+             error: null,
+@@ -229,13 +230,16 @@ export class PiHistoryMapper {
+       {
+         type: "timeline",
+         provider: this.provider,
+-        item: toToolResultTimelineItem({
+-          callId: this.resolveToolCallId(message.toolCallId, tracked),
+-          name: mapping?.name ?? tracked.toolName,
+-          isError: Boolean(message.isError),
+-          detail,
+-          errorText: extractTextFromToolResult(result) ?? "Tool call failed",
+-        }),
++        item: {
++          ...toToolResultTimelineItem({
++            callId: this.resolveToolCallId(message.toolCallId, tracked),
++            name: mapping?.name ?? tracked.toolName,
++            isError: Boolean(message.isError),
++            detail,
++            errorText: extractTextFromToolResult(result) ?? "Tool call failed",
++          }),
++          ...(mapping?.displayName ? { metadata: { toolDisplayName: mapping.displayName } } : {}),
++        },
+       },
+       ...this.extensionEvents(mapping),
+     ];
+diff --git a/packages/server/src/server/agent/providers/pi/agent.ts b/packages/server/src/server/agent/providers/pi/agent.ts
+index 8d99da19d..3088b4c22 100644
+--- a/packages/server/src/server/agent/providers/pi/agent.ts
++++ b/packages/server/src/server/agent/providers/pi/agent.ts
+@@ -2474,6 +2474,7 @@ export class PiRpcAgentSession implements AgentSession {
+       type: "tool_call" as const,
+       callId: toolCallId,
+       name: mapping?.name ?? toolCall.toolName,
++      ...(mapping?.displayName ? { metadata: { toolDisplayName: mapping.displayName } } : {}),
+       detail,
+     };
+     const item =
+diff --git a/packages/server/src/server/agent/providers/pi/agent.test.ts b/packages/server/src/server/agent/providers/pi/agent.test.ts
+index 064416931..bd3b49d1d 100644
+--- a/packages/server/src/server/agent/providers/pi/agent.test.ts
++++ b/packages/server/src/server/agent/providers/pi/agent.test.ts
+@@ -432,6 +432,35 @@ class SessionEvents {
+ }
+ 
+ describe("PiRpcAgentSession", () => {
++  test("emits MCP labels without changing tool identity", async () => {
++    const { pi, session, events } = await createSession();
++    const fakeSession = pi.latestSession();
++    await session.startTurn("run");
++    fakeSession.emit({
++      type: "tool_execution_start",
++      toolCallId: "mcp-1",
++      toolName: "mcp",
++      args: { tool: "paseo_list_agents" },
++    });
++    fakeSession.emit({
++      type: "tool_execution_end",
++      toolCallId: "mcp-1",
++      toolName: "mcp",
++      result: { content: [], details: { mode: "call", server: "paseo", tool: "list_agents" } },
++      isError: false,
++    });
++    fakeSession.finishTurn();
++    await events.nextTurnCompletion();
++    const calls = events.timelineItems().filter((item) => item.type === "tool_call");
++    expect(calls).toHaveLength(2);
++    for (const call of calls) {
++      expect(call).toMatchObject({
++        name: "paseo.list_agents",
++        metadata: { toolDisplayName: "Paseo > Get Agents" },
++      });
++    }
++  });
++
+   test("completes a turn and answers a dialog when an adapter throws", async () => {
+     const { pi, session, events } = await createSession();
+     Object.assign(session, {

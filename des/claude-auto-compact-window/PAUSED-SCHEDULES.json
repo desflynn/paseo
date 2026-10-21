@@ -1,0 +1,51 @@
+{
+  "authority": "Des: no agent reactivation until continue go",
+  "schedules": [
+    {
+      "id": "f5124a33",
+      "name": "guv-central-wiki-update",
+      "cadence": "cron:59 22 * * *",
+      "target": "new-agent:opencode/zai-coding-plan/glm-5.1",
+      "status": "active",
+      "nextRunAt": "2026-10-10T22:59:00.000Z",
+      "lastRunAt": "2026-10-09T22:59:28.164Z"
+    },
+    {
+      "id": "6575260d",
+      "name": "Daily check-ins",
+      "cadence": "cron:5 6,11,16 * * * (Europe/Dublin)",
+      "target": "new-agent:claude/claude-haiku-4-5",
+      "status": "active",
+      "nextRunAt": "2026-10-10T15:05:00.000Z",
+      "lastRunAt": "2026-10-10T10:05:52.803Z"
+    },
+    {
+      "id": "a4168c92",
+      "name": "guv-central-wiki-curate",
+      "cadence": "cron:0 2 * * *",
+      "target": "new-agent:opencode/zai-coding-plan/glm-5.1",
+      "status": "active",
+      "nextRunAt": "2026-10-11T02:00:00.000Z",
+      "lastRunAt": "2026-10-10T02:00:28.680Z"
+    },
+    {
+      "id": "c5897ea1",
+      "name": "houserules-nightly-review",
+      "cadence": "cron:0 3 * * *",
+      "target": "new-agent:opencode/zai-coding-plan/glm-5.1",
+      "status": "active",
+      "nextRunAt": "2026-10-11T03:00:00.000Z",
+      "lastRunAt": "2026-10-10T03:00:28.963Z"
+    },
+    {
+      "id": "9f87ba9f",
+      "name": "zoe-goodmorning-0845",
+      "cadence": "cron:45 8 * * 1-5 (Europe/Dublin)",
+      "target": "new-agent:opencode/zai-coding-plan/glm-5.1",
+      "status": "active",
+      "nextRunAt": "2026-10-12T07:45:00.000Z",
+      "lastRunAt": "2026-10-09T07:46:10.825Z"
+    }
+  ],
+  "resumeAuthorized": false
+}

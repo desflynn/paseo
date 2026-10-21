@@ -1,0 +1,14 @@
+{
+  "name": "tool-results-spike",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run shared/results.test.ts shared/tool-call.test.ts shared/grouping.test.ts shared/presentation.test.ts --bail=1"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "file:../../../packages/plugin",
+    "@getpaseo/protocol": "file:../../../packages/protocol"
+  }
+}

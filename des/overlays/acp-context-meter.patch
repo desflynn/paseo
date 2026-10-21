@@ -1,0 +1,41 @@
+From 85217317136215879f87047c10dae813adc78084 Mon Sep 17 00:00:00 2001
+From: Des Flynn <des@desflynn.com>
+Date: Sun, 30 Aug 2026 15:59:58 +0100
+Subject: [PATCH] fix(server): surface ACP usage_update window data to the
+ context meter
+
+ACP agent context window size and usage were being silently dropped in
+handleUsageUpdate, so the context indicator was never shown for ACP
+agents. Push them as a partial usage_updated event; agent-manager
+already merges partial usage into lastUsage, so the composer context
+meter renders immediately and updates live during long turns.
+---
+ .../server/src/server/agent/providers/acp-agent.ts   | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/packages/server/src/server/agent/providers/acp-agent.ts b/packages/server/src/server/agent/providers/acp-agent.ts
+index d2e0a1beb..a6646646e 100644
+--- a/packages/server/src/server/agent/providers/acp-agent.ts
++++ b/packages/server/src/server/agent/providers/acp-agent.ts
+@@ -3127,7 +3127,17 @@ export class ACPAgentSession implements AgentSession, ACPClient {
+   }
+ 
+   private handleUsageUpdate(update: UsageUpdate): void {
+-    void update;
++    // getpaseo/paseo#1390: ACP agents report window size + used tokens here.
++    // Push them as a partial usage event; agent-manager merges into lastUsage
++    // so the composer context meter updates live during long turns.
++    this.pushEvent({
++      type: "usage_updated",
++      provider: this.provider,
++      usage: {
++        contextWindowUsedTokens: update.used,
++        contextWindowMaxTokens: update.size,
++      },
++    });
+   }
+ 
+   private handlePromptResponse(response: PromptResponse, turnId: string): void {
+-- 
+2.52.0
+

@@ -1,0 +1,1 @@
+/Users/des/.dci/commands/dci-ingest.md

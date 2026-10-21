@@ -1,0 +1,24 @@
+{
+  "name": "render-probe",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@getpaseo/highlight": "file:../../../packages/highlight"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@getpaseo/plugin": "0.9.2",
+    "@react-native/babel-preset": "^0.81.5",
+    "@tanstack/react-query": "^5.0.0",
+    "@types/react": "~19.2.0",
+    "esbuild": "^0.25.12",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3",
+    "zod": "^4.4.3"
+  }
+}
