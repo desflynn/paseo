@@ -3,6 +3,21 @@ import { describe, expect, it } from "vitest";
 import { buildToolCallDisplayModel } from "./tool-call-display.js";
 
 describe("shared tool-call display mapping", () => {
+  it.each(["Paseo > Get Agents", "Flight-plan > Prefill", "Gateway > Search Tools"])(
+    "preserves the server and action label %s",
+    (name) => {
+      expect(
+        buildToolCallDisplayModel({
+          name: "paseo.list_agents",
+          status: "running",
+          error: null,
+          metadata: { toolDisplayName: name },
+          detail: { type: "unknown", input: {}, output: null },
+        }).displayName,
+      ).toBe(name);
+    },
+  );
+
   it("builds summary from canonical detail", () => {
     const display = buildToolCallDisplayModel({
       name: "read_file",

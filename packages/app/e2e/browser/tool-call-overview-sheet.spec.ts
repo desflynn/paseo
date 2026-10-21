@@ -261,6 +261,43 @@ test.describe("compact overview tool calls", () => {
   });
 });
 
+test("preserves server and action labels in tool-call badges", async ({ page }, testInfo) => {
+  const agent = await createOverviewAgent(page, "Pi gateway label display");
+  try {
+    await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
+      const server = ws.connectToServer();
+      ws.onMessage((message) => server.send(message));
+      server.onMessage((message) => {
+        if (!getToolCallStatus(message, agent.agentId)) {
+          ws.send(message);
+          return;
+        }
+        const raw = typeof message === "string" ? message : message.toString("utf8");
+        const envelope = JSON.parse(raw);
+        const item = envelope.message.payload.event.item;
+        item.name = "paseo.list_agents";
+        item.metadata = { ...item.metadata, toolDisplayName: "Paseo > Get Agents" };
+        item.detail = { type: "unknown", input: {}, output: null };
+        ws.send(JSON.stringify(envelope));
+      });
+    });
+    await openOverviewAgent(page, agent);
+    await agent.client.sendAgentMessage(agent.agentId, "Show the gateway tool label.");
+    const group = page.getByTestId("tool-call-group").first();
+    await expect(group).toBeVisible();
+    await group.click();
+    const badge = group.getByTestId("tool-call-badge").first();
+    await expect(badge).toContainText("Paseo > Get Agents");
+    await expect(group).toContainText(/called Paseo/i);
+    await testInfo.attach("pi-mcp-server-action-label", {
+      body: await page.screenshot({ path: "/tmp/paseo-0103-pi-label.png" }),
+      contentType: "image/png",
+    });
+  } finally {
+    await agent.cleanup();
+  }
+});
+
 test("keeps overview tool calls inline on desktop", async ({ page }) => {
   test.setTimeout(120_000);
   const agent = await createOverviewAgent(page, "Desktop overview tool calls");

@@ -19,6 +19,8 @@ export interface PiExtensionToolCall {
 
 export interface PiExtensionToolMapping {
   name?: string;
+  /** User-facing label; name remains the canonical tool identity. */
+  displayName?: string;
   detail?: ToolCallDetail;
   timeline?: AgentTimelineItem[];
   subagents?: ProviderSubagentInputEvent[];
