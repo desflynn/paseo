@@ -1,8 +1,8 @@
 diff --git a/packages/server/src/server/agent/tools/paseo-tools.ts b/packages/server/src/server/agent/tools/paseo-tools.ts
-index 07f9f2109..2f8470816 100644
+index 34a8d5ebe..d2c406aa9 100644
 --- a/packages/server/src/server/agent/tools/paseo-tools.ts
 +++ b/packages/server/src/server/agent/tools/paseo-tools.ts
-@@ -33,6 +33,8 @@ import {
+@@ -34,6 +34,8 @@ import {
    type ArchiveDependencies,
  } from "../../workspace-archive-service.js";
  import { createAgentCommand, type CreateAgentFromMcpInput } from "../create-agent/create.js";
@@ -11,7 +11,7 @@ index 07f9f2109..2f8470816 100644
  import type { VoiceCallerContext, VoiceSpeakHandler } from "../../voice-types.js";
  import type { FirstAgentContext } from "../../messages.js";
  import { everyMsToFiveFieldCron } from "@getpaseo/protocol/schedule/cadence";
-@@ -106,6 +108,7 @@ export interface PaseoToolHostDependencies {
+@@ -115,6 +117,7 @@ export interface PaseoToolHostDependencies {
    terminalManager?: TerminalManager | null;
    getDaemonTcpPort?: () => number | null;
    scheduleService?: ScheduleService | null;
@@ -19,7 +19,7 @@ index 07f9f2109..2f8470816 100644
    providerSnapshotManager: ProviderSnapshotManager;
    daemonConfigStore?: Pick<DaemonConfigStore, "get">;
    github?: ForgeService;
-@@ -1500,6 +1503,15 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
+@@ -1591,6 +1594,15 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
          },
        );
  
@@ -32,14 +32,14 @@ index 07f9f2109..2f8470816 100644
 +        logger: childLogger,
 +      });
 +
-       try {
-         if (!createdInBackground && initialPromptStarted) {
-           const result = await waitForAgentWithTimeout(agentManager, snapshot.id, {
+       // Return immediately for async creation.
+       const currentSnapshot = agentManager.getAgent(snapshot.id) ?? snapshot;
+       const guidance =
 diff --git a/packages/server/src/server/bootstrap.ts b/packages/server/src/server/bootstrap.ts
-index 0ec792e87..9864db926 100644
+index 727c7b789..aaa7195a8 100644
 --- a/packages/server/src/server/bootstrap.ts
 +++ b/packages/server/src/server/bootstrap.ts
-@@ -1360,6 +1360,7 @@ export async function createPaseoDaemon(
+@@ -1368,6 +1368,7 @@ export async function createPaseoDaemon(
      createDirectoryWorkspace: createScheduleLocalWorkspaceExternal,
      createPaseoWorktreeWorkspace: createSchedulePaseoWorktreeExternal,
      archiveWorkspace: archiveScheduleWorkspaceExternal,
@@ -47,7 +47,7 @@ index 0ec792e87..9864db926 100644
    });
    await scheduleService.start();
    agentManager.setAgentArchivedCallback(async (agentId) => {
-@@ -1389,6 +1390,7 @@ export async function createPaseoDaemon(
+@@ -1397,6 +1398,7 @@ export async function createPaseoDaemon(
      terminalManager,
      getDaemonTcpPort: () => (boundListenTarget?.type === "tcp" ? boundListenTarget.port : null),
      scheduleService,
@@ -56,10 +56,10 @@ index 0ec792e87..9864db926 100644
      daemonConfigStore,
      github,
 diff --git a/packages/server/src/server/schedule/service.test.ts b/packages/server/src/server/schedule/service.test.ts
-index 14e022191..9d3a23cd5 100644
+index 1a9f0f5fd..12771db9d 100644
 --- a/packages/server/src/server/schedule/service.test.ts
 +++ b/packages/server/src/server/schedule/service.test.ts
-@@ -930,6 +930,78 @@ describe("ScheduleService", () => {
+@@ -1195,6 +1195,77 @@ describe("ScheduleService", () => {
      });
    });
  
@@ -111,7 +111,6 @@ index 14e022191..9d3a23cd5 100644
 +          liveSnapshot: snapshot as Awaited<
 +            ReturnType<ScheduleServiceOptions["createAgent"]>
 +          >["liveSnapshot"],
-+          background: true,
 +          initialPromptStarted: false,
 +          initialPromptError: null,
 +        };
@@ -139,10 +138,10 @@ index 14e022191..9d3a23cd5 100644
      let runCount = 0;
      const manager = new AgentManager({
 diff --git a/packages/server/src/server/schedule/service.ts b/packages/server/src/server/schedule/service.ts
-index 53d2432f8..01d3a0d1d 100644
+index 3b462cc5b..24026bde0 100644
 --- a/packages/server/src/server/schedule/service.ts
 +++ b/packages/server/src/server/schedule/service.ts
-@@ -28,6 +28,8 @@ import type {
+@@ -25,6 +25,8 @@ import type {
    UpdateScheduleNewAgentConfig,
  } from "@getpaseo/protocol/schedule/types";
  import type { FirstAgentContext } from "@getpaseo/protocol/messages";
@@ -151,7 +150,7 @@ index 53d2432f8..01d3a0d1d 100644
  
  const SCHEDULE_TICK_INTERVAL_MS = 1000;
  
-@@ -214,6 +216,7 @@ type ScheduleAgentManager = Pick<
+@@ -237,6 +239,7 @@ type ScheduleAgentManager = Pick<
      | "createAgent"
      | "getRegisteredProviderIds"
      | "hydrateTimelineFromProvider"
@@ -159,7 +158,7 @@ index 53d2432f8..01d3a0d1d 100644
      | "resumeAgentFromPersistence"
      | "runAgent"
      | "waitForAgentEvent"
-@@ -238,6 +241,7 @@ export interface ScheduleServiceOptions {
+@@ -261,6 +264,7 @@ export interface ScheduleServiceOptions {
      input: ScheduleWorkspaceCreateInput,
    ) => Promise<CreatePaseoWorktreeWorkflowResult>;
    archiveWorkspace: (workspaceId: string) => Promise<void>;
@@ -167,7 +166,7 @@ index 53d2432f8..01d3a0d1d 100644
    now?: () => Date;
    runner?: (schedule: StoredSchedule, runId: string) => Promise<ScheduleExecutionResult>;
  }
-@@ -255,6 +259,7 @@ export class ScheduleService {
+@@ -278,6 +282,7 @@ export class ScheduleService {
      input: ScheduleWorkspaceCreateInput,
    ) => Promise<CreatePaseoWorktreeWorkflowResult>;
    private readonly archiveWorkspace: (workspaceId: string) => Promise<void>;
@@ -175,7 +174,7 @@ index 53d2432f8..01d3a0d1d 100644
    private readonly now: () => Date;
    private readonly runner: (
      schedule: StoredSchedule,
-@@ -272,6 +277,7 @@ export class ScheduleService {
+@@ -295,6 +300,7 @@ export class ScheduleService {
      this.createDirectoryWorkspace = options.createDirectoryWorkspace;
      this.createPaseoWorktreeWorkspace = options.createPaseoWorktreeWorkspace;
      this.archiveWorkspace = options.archiveWorkspace;
@@ -183,7 +182,7 @@ index 53d2432f8..01d3a0d1d 100644
      this.now = options.now ?? (() => new Date());
      this.runner = options.runner ?? ((schedule, runId) => this.executeSchedule(schedule, runId));
    }
-@@ -915,6 +921,14 @@ export class ScheduleService {
+@@ -1004,6 +1010,14 @@ export class ScheduleService {
        });
        const agent = created.snapshot;
        agentId = agent.id;
@@ -199,10 +198,136 @@ index 53d2432f8..01d3a0d1d 100644
          scheduleId: schedule.id,
          runId,
 diff --git a/packages/server/src/server/session.test.ts b/packages/server/src/server/session.test.ts
-index ba821fbbd..dd25afa34 100644
+index a62786e95..299a6f3e4 100644
 --- a/packages/server/src/server/session.test.ts
 +++ b/packages/server/src/server/session.test.ts
-@@ -6000,3 +6000,145 @@ describe("owner MINE workspace label overlay", () => {
+@@ -1634,6 +1634,125 @@ describe("agent detach RPC", () => {
+       },
+     });
+   });
++
++  test("detaching an agent alone in its workspace clears the SUB overlay", async () => {
++    const childAfter = createStoredAgentRecord({
++      id: "child-agent",
++      cwd: "/tmp/child",
++      workspaceId: "workspace-child",
++      labels: {},
++    });
++    const workspace = {
++      workspaceId: "workspace-child",
++      projectId: "project-child",
++      cwd: "/tmp/child",
++      kind: "worktree" as const,
++      displayName: "Child workspace",
++      title: null,
++      branch: "child",
++      baseBranch: null,
++      createdAt: "2026-01-01T00:00:00.000Z",
++      updatedAt: "2026-01-01T00:00:00.000Z",
++      archivedAt: null,
++    };
++    const project = {
++      projectId: "project-child",
++      rootPath: "/tmp/child",
++      kind: "git" as const,
++      displayName: "Project",
++      customName: null,
++      createdAt: "2026-01-01T00:00:00.000Z",
++      updatedAt: "2026-01-01T00:00:00.000Z",
++      archivedAt: null,
++    };
++    const setAssignment = vi.fn(async (input: { label: { name: string } }) => ({
++      label: input.label,
++      workspaceLabels: [],
++    }));
++    const detachAgent = vi.fn().mockResolvedValue({
++      record: childAfter,
++      live: false,
++      previousParentAgentId: "parent-agent",
++    });
++
++    const session = createSessionForTest({
++      agentManager: {
++        getAgent: vi.fn(() => null),
++        detachAgent,
++        // Post-detach the child is alone in its workspace.
++        listAgents: vi.fn(() => [{ id: "child-agent", workspaceId: "workspace-child" }]),
++      },
++      agentStorage: {
++        list: vi.fn().mockResolvedValue([]),
++        get: vi.fn().mockResolvedValue(null),
++      },
++      workspaceRegistry: {
++        get: vi.fn().mockResolvedValue(workspace),
++        list: vi.fn().mockResolvedValue([workspace]),
++      },
++      projectRegistry: {
++        get: vi.fn().mockResolvedValue(project),
++        list: vi.fn().mockResolvedValue([project]),
++      },
++      workspaceLabelService: { setAssignment } as unknown as WorkspaceLabelService,
++    });
++
++    await session.handleMessage({
++      type: "agent.detach.request",
++      agentId: "child-agent",
++      requestId: "detach-sub-1",
++    });
++
++    expect(detachAgent).toHaveBeenCalledWith("child-agent");
++    expect(setAssignment).toHaveBeenCalledWith({
++      workspaceId: "workspace-child",
++      label: { name: "SUB", color: "sky" },
++      assigned: false,
++    });
++  });
++
++  test("detaching an agent in an occupied workspace does not clear SUB", async () => {
++    const childAfter = createStoredAgentRecord({
++      id: "child-agent",
++      cwd: "/tmp/child",
++      workspaceId: "workspace-child",
++      labels: {},
++    });
++    const setAssignment = vi.fn(async (input: { label: { name: string } }) => ({
++      label: input.label,
++      workspaceLabels: [],
++    }));
++    const detachAgent = vi.fn().mockResolvedValue({
++      record: childAfter,
++      live: false,
++      previousParentAgentId: "parent-agent",
++    });
++
++    const session = createSessionForTest({
++      agentManager: {
++        getAgent: vi.fn(() => null),
++        detachAgent,
++        // Another live agent shares the workspace: the SUB label stays.
++        listAgents: vi.fn(() => [
++          { id: "child-agent", workspaceId: "workspace-child" },
++          { id: "sibling-agent", workspaceId: "workspace-child" },
++        ]),
++      },
++      agentStorage: {
++        list: vi.fn().mockResolvedValue([]),
++        get: vi.fn().mockResolvedValue(null),
++      },
++      workspaceLabelService: { setAssignment } as unknown as WorkspaceLabelService,
++    });
++
++    await session.handleMessage({
++      type: "agent.detach.request",
++      agentId: "child-agent",
++      requestId: "detach-sub-2",
++    });
++
++    expect(setAssignment).not.toHaveBeenCalled();
++  });
+ });
+ 
+ function createProjectRecord(rootPath: string, archivedAt: string | null = null) {
+@@ -6005,3 +6124,145 @@ describe("owner MINE workspace label overlay", () => {
      }
    });
  });
@@ -349,10 +474,10 @@ index ba821fbbd..dd25afa34 100644
 +  });
 +});
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index 454d00ff7..a3464221d 100644
+index 6c421c21d..c0e3ab03a 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -98,6 +98,7 @@ import {
+@@ -99,6 +99,7 @@ import {
    WorkspaceLabelStorageUncertainError,
    type WorkspaceLabelService,
  } from "./workspace-labels/index.js";
@@ -360,7 +485,38 @@ index 454d00ff7..a3464221d 100644
  
  import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
  import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
-@@ -4015,6 +4016,10 @@ export class Session {
+@@ -3300,6 +3301,30 @@ export class Session {
+         }
+       }
+ 
++      // SUB overlay (des/overlays): a detached agent is a root agent, not a
++      // subagent. When it is alone in its workspace, clear the SUB label the
++      // creation path applied.
++      const detachedWorkspaceId = result.record.workspaceId ?? null;
++      if (detachedWorkspaceId && this.workspaceLabelService) {
++        const occupied = this.agentManager
++          .listAgents()
++          .some((agent) => agent.id !== agentId && agent.workspaceId === detachedWorkspaceId);
++        if (!occupied) {
++          await this.workspaceLabelService
++            .setAssignment({
++              workspaceId: detachedWorkspaceId,
++              label: { name: "SUB", color: "sky" },
++              assigned: false,
++            })
++            .catch((error: unknown) => {
++              this.sessionLogger.warn(
++                { err: error, workspaceId: detachedWorkspaceId },
++                "Failed to clear SUB workspace label",
++              );
++            });
++        }
++      }
++
+       await this.emitWorkspaceUpdatesForWorkspaceIds(affectedWorkspaceIds);
+ 
+       this.emit({
+@@ -4046,6 +4071,10 @@ export class Session {
          progress ? (snapshot) => progress.emit(this.creationUpdate(snapshot)) : undefined,
        );
        this.applyOwnerMineLabel(creation.agent?.workspaceId ?? creation.workspaceId);
@@ -371,15 +527,15 @@ index 454d00ff7..a3464221d 100644
        this.emitForSource(
          {
            type: "agent.create.response",
-@@ -4180,6 +4185,7 @@ export class Session {
-         agent = await this.createSessionAgent(msg);
+@@ -4211,6 +4240,7 @@ export class Session {
+         ({ agent } = await this.createSessionAgent(msg));
        }
        this.applyOwnerMineLabel(agent.workspaceId);
 +      this.applySubLabelForAgentTraffic(agent.id, agent.workspaceId);
        this.emit({
          type: "status",
          payload: {
-@@ -6392,6 +6398,21 @@ export class Session {
+@@ -6470,6 +6500,21 @@ export class Session {
        });
    }
  

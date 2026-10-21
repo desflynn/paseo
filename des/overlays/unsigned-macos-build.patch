@@ -1,5 +1,5 @@
 diff --git a/package.json b/package.json
-index 35257ef46..343ede7d9 100644
+index 3cdad0e52..5252e3efe 100644
 --- a/package.json
 +++ b/package.json
 @@ -148,5 +148,20 @@
@@ -24,7 +24,7 @@ index 35257ef46..343ede7d9 100644
    }
  }
 diff --git a/packages/desktop/electron-builder.yml b/packages/desktop/electron-builder.yml
-index 6ab5a9b69..8816bc3b0 100644
+index 8634d1f05..ac0d7a3ec 100644
 --- a/packages/desktop/electron-builder.yml
 +++ b/packages/desktop/electron-builder.yml
 @@ -44,10 +44,9 @@ mac:

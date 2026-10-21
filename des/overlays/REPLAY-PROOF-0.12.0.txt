@@ -1,0 +1,32 @@
+Replay proof for the 0.12.0-df overlay stack (2026-10-21, head guy)
+
+Method: fresh detached worktree at tag v0.12.0 (cafe4b01c). The ten patches in
+des/overlays/ were applied with `git apply --index`, one at a time, in README order:
+  unsigned-macos-build, pi-compaction-hold, pi-worktree-trust, pi-mcp-labels,
+  mine-label, sub-label, reload-wait, pi-compaction-status, claude-stale-subagent,
+  claude-auto-compact-window
+All ten applied with no conflict and no offset repair.
+
+Result: `git diff --cached 0.12.0-df` over every path except the seed assets
+(des, .agents, .claude, .flight, .flight.disabled, .codex, .pi, CLAUDE.md, .gitignore)
+is empty (0 lines). The stack changes 31 files against v0.12.0 and reproduces the
+0.12.0-df code byte for byte.
+
+Gates on the integrated branch (head 165559c2c before this commit):
+  npm run build:server   exit 0
+  npm run typecheck      exit 0
+  npm run lint (changed files)   exit 0
+  npm run format:files (changed files)   exit 0, no file changed
+  touched tests, one file at a time, all pass (764 tests):
+    protocol/src/tool-call-display.test.ts                          17
+    server/src/server/agent/agent-manager.test.ts                  209
+    server/.../providers/claude/agent.sub-agent-sidechain.test.ts    8
+    server/.../providers/claude/agent.subagent-interrupt.test.ts     4
+    server/.../providers/claude/agent.test.ts                      107
+    server/.../providers/claude/subagents/live-source.test.ts       55
+    server/.../providers/pi/agent.test.ts                          134
+    server/src/server/schedule/service.test.ts                      71
+    server/src/server/session.test.ts                              159
+The full suite was not run on purpose (repo rule).
+
+Not proven here: a live daemon smoke, a browser check, the desktop build.

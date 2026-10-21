@@ -10,21 +10,22 @@ Plugins (`des/plugins/`) and upgrade notes (`des/upgrade-*`) are not overlays. T
 
 Before switching the existing checkout, commit or classify every project-owned change. Seed the
 new branch with the preserved plugin, overlay and harness assets so daemon-served paths remain
-available. Use the following patch order on `v0.11.1`; overlay 2 remains superseded.
+available. Use the following patch order on `v0.12.0`; overlay 2 remains superseded.
 The ten-patch stack reproduces 31 carried files byte-for-byte on this base; see
-`../claude-auto-compact-window/REPLAY-PROOF.txt`.
+`REPLAY-PROOF-0.12.0.txt`. The order changed in 0.12: it is now the order of the
+`0.12.0-df` commits, and each patch applies with plain `git apply` in that order.
 
 ```bash
-git apply --3way des/overlays/unsigned-macos-build.patch
-git apply --3way des/overlays/mine-label.patch
-git apply --3way des/overlays/pi-compaction-hold.patch
-git apply --3way des/overlays/sub-label.patch
-git apply --3way des/overlays/reload-wait.patch
-git apply --3way des/overlays/pi-worktree-trust.patch
-git apply --3way des/overlays/pi-compaction-status.patch
-git apply --3way des/overlays/claude-stale-subagent.patch
-git apply --3way des/overlays/pi-mcp-labels.patch
-git apply --3way des/overlays/claude-auto-compact-window.patch
+git apply des/overlays/unsigned-macos-build.patch
+git apply des/overlays/pi-compaction-hold.patch
+git apply des/overlays/pi-worktree-trust.patch
+git apply des/overlays/pi-mcp-labels.patch
+git apply des/overlays/mine-label.patch
+git apply des/overlays/sub-label.patch
+git apply des/overlays/reload-wait.patch
+git apply des/overlays/pi-compaction-status.patch
+git apply des/overlays/claude-stale-subagent.patch
+git apply des/overlays/claude-auto-compact-window.patch
 npm install                 # approve exact resolved install-script versions, see overlay 1
 npm run build:desktop        # from the repo root; installation is a separate owner action
 ```
@@ -35,6 +36,26 @@ Check a patch without touching the working tree:
 GIT_INDEX_FILE=/tmp/overlay-check.idx git read-tree vX.Y.Z
 GIT_INDEX_FILE=/tmp/overlay-check.idx git apply --cached --check des/overlays/<name>.patch
 ```
+
+## 0.12.0 carry results (2026-10-21)
+
+Every carry was test first: the patch's tests were ported onto the 0.12 code and shown red, then
+the code went green. Gates on the integrated branch: `build:server`, typecheck, lint and format
+clean; the nine touched test files pass (764 tests).
+
+| Overlay                    | Verdict on 0.12.0     | Note                                                                                                                                                                                         |
+| -------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| unsigned-macos-build       | kept, applies clean   | `allowScripts` versions are reference only; npm flagged one new install script, `react-native-enriched-markdown` (not approved: native assets, not needed for the Electron web export).      |
+| pi-compaction-hold         | kept, unchanged       | Own tests pass.                                                                                                                                                                              |
+| pi-worktree-trust          | kept, unchanged       | Own tests pass.                                                                                                                                                                              |
+| pi-mcp-labels              | kept, re-anchored     | Upstream's `paseo-tool-presentation` early return buried carried `Server > Action` labels for `paseo.*` names; `tool-call-display.ts` fixed test first and folded into this patch.           |
+| mine-label                 | kept, re-anchored     | `handleAgentCreation`, `handleCreateAgentRequest` destructure, and the reworked send region.                                                                                                 |
+| sub-label                  | kept, re-anchored     | Includes the deployed detach-clears-SUB fix (`des/o1110-detach-sub/`). Background workspaces are orthogonal: they only change listing visibility, SUB reads the background-blind agent list. |
+| reload-wait                | kept, re-anchored     | The wait now sits upstream of the new `readSettledAgent` fallback in `session.ts`.                                                                                                           |
+| pi-compaction-status       | kept                  | Only `pi/agent.test.ts` needed rework.                                                                                                                                                       |
+| claude-stale-subagent      | kept, nothing trimmed | Upstream #6660, #6242 and #7266 cover other bugs; `completeRunningForegroundTasks` and the legacy sidechain gate are still absent upstream.                                                  |
+| claude-auto-compact-window | kept, trimmed         | Precedence unchanged. 0.12 keys usage by the active model, so the override applies on the active-model entry; the 0.11 max-over-all-models scan stays only as a fallback.                    |
+| acp-context-meter          | retired               | Upstream ships its own fix (`acp-agent.ts` `handleUsageUpdate`). The old patch file is kept for history and is not applied.                                                                  |
 
 ## 1. Unsigned macOS build (the big one)
 

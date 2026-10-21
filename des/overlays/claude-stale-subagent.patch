@@ -185,10 +185,10 @@ index 1223bbc54..00dae3270 100644
      const { session, subagentEvents } = await startInterruptibleTurn();
  
 diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
-index b797ce2c9..3e938654e 100644
+index 2af8983de..c49490a4b 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.ts
-@@ -4336,6 +4336,16 @@ class ClaudeAgentSession implements AgentSession {
+@@ -4488,6 +4488,16 @@ class ClaudeAgentSession implements AgentSession {
        ),
      ).map((event): AgentStreamEvent => ({ type: "provider_subagent", provider: "claude", event }));
      const routedId = canonicalSubagentId ?? parentToolUseId;
@@ -202,11 +202,11 @@ index b797ce2c9..3e938654e 100644
 +    ) {
 +      return [];
 +    }
-     return [...runtimeEvents, ...this.sidechainTracker.handleMessage(message, routedId)];
-   }
- 
-@@ -4629,6 +4639,14 @@ class ClaudeAgentSession implements AgentSession {
-     const usage = this.convertUsage(message, message.modelUsage);
+     const settled = this.settledSubagentToolCalls.get(routedId);
+     const sidechainEvents = this.sidechainTracker.handleMessage(message, routedId).map((event) => {
+       if (event.type === "timeline" && settled?.turnId) event.turnId = settled.turnId;
+@@ -4786,6 +4796,14 @@ class ClaudeAgentSession implements AgentSession {
+     const usage = this.convertUsage(message);
      if (message.subtype === "success") {
        events.push(...this.sidechainTracker.finishAll("completed"));
 +      // The task protocol owns the descriptor, so finishAll no-ops once it is active — close the
@@ -220,7 +220,7 @@ index b797ce2c9..3e938654e 100644
        // Built-in slash commands (e.g. /voice, /usage, "Unknown command: …")
        // run client-side in the Claude CLI with no model turn — output_tokens
        // is 0 and the user-visible text is carried in `result`. Surface it only
-@@ -4920,7 +4938,12 @@ class ClaudeAgentSession implements AgentSession {
+@@ -5083,7 +5101,12 @@ class ClaudeAgentSession implements AgentSession {
        }
      }
      this.toolUseCache.clear();

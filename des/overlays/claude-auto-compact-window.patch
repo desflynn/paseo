@@ -1,8 +1,8 @@
 diff --git a/packages/server/src/server/agent/providers/claude/agent.test.ts b/packages/server/src/server/agent/providers/claude/agent.test.ts
-index 9f7430b10..29ae75afd 100644
+index d6b869f1e..23f6256f4 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.test.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.test.ts
-@@ -1898,6 +1898,7 @@ describe("ClaudeAgentSession context window usage", () => {
+@@ -1962,6 +1962,7 @@ describe("ClaudeAgentSession context window usage", () => {
    interface QueryFactoryForTurnsOptions {
      getContextUsage?: ReturnType<typeof vi.fn>;
      model?: string;
@@ -10,7 +10,7 @@ index 9f7430b10..29ae75afd 100644
    }
  
    async function createSessionForTest(): Promise<TestClaudeSession> {
-@@ -1917,6 +1918,7 @@ describe("ClaudeAgentSession context window usage", () => {
+@@ -1981,6 +1982,7 @@ describe("ClaudeAgentSession context window usage", () => {
        logger,
        queryFactory: createQueryFactoryForTurns(turns, options),
        resolveBinary: async () => "/test/claude/bin",
@@ -18,7 +18,7 @@ index 9f7430b10..29ae75afd 100644
      });
      return await client.createSession({
        provider: "claude",
-@@ -2036,6 +2038,7 @@ describe("ClaudeAgentSession context window usage", () => {
+@@ -2100,6 +2102,7 @@ describe("ClaudeAgentSession context window usage", () => {
          }),
          setPermissionMode: vi.fn(async () => undefined),
          setModel: vi.fn(async () => undefined),
@@ -26,7 +26,7 @@ index 9f7430b10..29ae75afd 100644
          getContextUsage,
          supportedModels: vi.fn(async () => []),
          supportedCommands: vi.fn(async () => []),
-@@ -2826,6 +2829,497 @@ describe("ClaudeAgentSession context window usage", () => {
+@@ -2899,6 +2902,497 @@ describe("ClaudeAgentSession context window usage", () => {
      }
    });
  
@@ -525,14 +525,21 @@ index 9f7430b10..29ae75afd 100644
      const session = await createSessionForTurns([
        [
 diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
-index 3e938654e..0bc569c8e 100644
+index c49490a4b..d353784de 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.ts
-@@ -1798,14 +1798,77 @@ async function resolveClaudeAuth(
+@@ -31,6 +31,7 @@ import {
+   readTaskNotificationToolUseIdFromHistoryRecord,
+ } from "./task-notification-tool-call.js";
+ import {
++  findClaudeModel,
+   getClaudeContextWindowMaxTokens,
+   getClaudeModelsWithSettings,
+   normalizeClaudeRuntimeModelId,
+@@ -1889,9 +1890,70 @@ async function resolveClaudeAuth(
    }
  }
  
--function extractContextWindowSize(modelUsage: unknown): number | undefined {
 +function readPositiveWindowTokens(value: unknown): number | undefined {
 +  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 +}
@@ -592,127 +599,146 @@ index 3e938654e..0bc569c8e 100644
 +  return readPositiveWindowTokens(settings.autoCompactWindow);
 +}
 +
-+function extractContextWindowSize(
-+  modelUsage: unknown,
-+  resolveUsageModelAutoCompactOverride?: (modelId: string) => number | undefined,
+ function extractContextWindowSize(
+   modelUsage: unknown,
+   modelId: string | null | undefined,
++  resolveModelAutoCompactOverride?: (modelId: string) => number | undefined,
 +  primaryModelId?: string,
-+): number | undefined {
+ ): number | undefined {
    const usageRecord = toObjectRecord(modelUsage);
    if (!usageRecord) {
-     return undefined;
-   }
- 
-   let maxContextWindow: number | undefined;
--  for (const value of Object.values(usageRecord)) {
-+  for (const [modelId, value] of Object.entries(usageRecord)) {
-     const valueRecord = toObjectRecord(value);
-     if (!valueRecord) {
-       continue;
-@@ -1818,7 +1881,18 @@ function extractContextWindowSize(modelUsage: unknown): number | undefined {
-     ) {
-       continue;
-     }
--    maxContextWindow = Math.max(maxContextWindow ?? 0, contextWindow);
+@@ -1901,10 +1963,35 @@ function extractContextWindowSize(
+   // modelUsage accumulates every model used in the session, including earlier turns
+   // and subagents. Only the active model describes this turn's context capacity.
+   const modelUsageEntry = modelId ? usageRecord[modelId] : undefined;
+-  const contextWindow = toObjectRecord(modelUsageEntry)?.contextWindow;
+-  return typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
+-    ? contextWindow
+-    : undefined;
++  const contextWindow = readPositiveWindowTokens(toObjectRecord(modelUsageEntry)?.contextWindow);
++  if (contextWindow !== undefined) {
 +    // Without a configured override the SDK-reported window is preserved exactly, even when it
 +    // differs from the manifest. An override is capped at the model's real window.
-+    let effectiveWindow = contextWindow;
-+    const override = resolveUsageModelAutoCompactOverride?.(modelId);
++    const override = modelId ? resolveModelAutoCompactOverride?.(modelId) : undefined;
++    return override === undefined ? contextWindow : Math.min(override, contextWindow);
++  }
++
++  // The active model has no reported usage yet (settings-resolved aliases, or a first result
++  // that lands before the runtime model is captured). Resolve per real SDK modelUsage key
++  // instead of losing the denominator: each entry's override is capped at that entry's window,
++  // and the primary model's effective window wins outright so a helper model cannot inflate it.
++  let maxContextWindow: number | undefined;
++  for (const [entryModelId, value] of Object.entries(usageRecord)) {
++    const entryWindow = readPositiveWindowTokens(toObjectRecord(value)?.contextWindow);
++    if (entryWindow === undefined) {
++      continue;
++    }
++    let effectiveWindow = entryWindow;
++    const override = resolveModelAutoCompactOverride?.(entryModelId);
 +    if (override !== undefined) {
-+      effectiveWindow = Math.min(override, contextWindow);
-+      // Helper model usage must not inflate the configured primary session window.
-+      if ((findClaudeModel(modelId)?.id ?? modelId) === primaryModelId) {
++      effectiveWindow = Math.min(override, entryWindow);
++      if ((findClaudeModel(entryModelId)?.id ?? entryModelId) === primaryModelId) {
 +        return effectiveWindow;
 +      }
 +    }
 +    maxContextWindow = Math.max(maxContextWindow ?? 0, effectiveWindow);
-   }
++  }
++  return maxContextWindow;
+ }
  
-   return maxContextWindow;
-@@ -1946,8 +2020,16 @@ class ClaudeContextUsageState {
+ interface StreamRequestInputUsage {
+@@ -2058,8 +2145,22 @@ class ClaudeContextUsageState {
      this.contextWindowMaxTokens = contextWindowMaxTokens;
    }
  
--  recordModelUsage(modelUsage: unknown): number | undefined {
--    const contextWindowMaxTokens = extractContextWindowSize(modelUsage);
+-  recordModelUsage(modelUsage: unknown, modelId: string | null | undefined): number | undefined {
+-    const contextWindowMaxTokens = extractContextWindowSize(modelUsage, modelId);
++  hasContextWindowMaxTokens(): boolean {
++    return this.contextWindowMaxTokens !== undefined;
++  }
++
 +  recordModelUsage(
 +    modelUsage: unknown,
-+    resolveUsageModelAutoCompactOverride?: (modelId: string) => number | undefined,
++    modelId: string | null | undefined,
++    resolveModelAutoCompactOverride?: (modelId: string) => number | undefined,
 +    primaryModelId?: string,
 +  ): number | undefined {
 +    const contextWindowMaxTokens = extractContextWindowSize(
 +      modelUsage,
-+      resolveUsageModelAutoCompactOverride,
++      modelId,
++      resolveModelAutoCompactOverride,
 +      primaryModelId,
 +    );
      if (contextWindowMaxTokens !== undefined) {
        this.contextWindowMaxTokens = contextWindowMaxTokens;
      }
-@@ -1984,7 +2066,12 @@ class ClaudeContextUsageState {
-     return this.createUsageUpdatedEvent(usedTokens);
-   }
- 
--  buildResultUsage(message: SDKResultMessage, modelUsage: unknown): AgentUsage | undefined {
-+  buildResultUsage(
-+    message: SDKResultMessage,
-+    modelUsage: unknown,
-+    resolveUsageModelAutoCompactOverride?: (modelId: string) => number | undefined,
+@@ -2105,6 +2206,8 @@ class ClaudeContextUsageState {
+   buildResultUsage(
+     message: SDKResultMessage,
+     modelId: string | null | undefined,
++    resolveModelAutoCompactOverride?: (modelId: string) => number | undefined,
 +    primaryModelId?: string,
-+  ): AgentUsage | undefined {
+   ): AgentUsage | undefined {
      try {
        if (!message.usage) {
-         return undefined;
-@@ -1996,7 +2083,11 @@ class ClaudeContextUsageState {
+@@ -2117,7 +2220,12 @@ class ClaudeContextUsageState {
          totalCostUsd: message.total_cost_usd,
        };
  
--      const modelContextWindowMaxTokens = this.recordModelUsage(modelUsage ?? message.modelUsage);
+-      const modelContextWindowMaxTokens = this.recordModelUsage(message.modelUsage, modelId);
 +      const modelContextWindowMaxTokens = this.recordModelUsage(
-+        modelUsage ?? message.modelUsage,
-+        resolveUsageModelAutoCompactOverride,
++        message.modelUsage,
++        modelId,
++        resolveModelAutoCompactOverride,
 +        primaryModelId,
 +      );
        if (this.contextWindowMaxTokens !== undefined) {
          usage.contextWindowMaxTokens = this.contextWindowMaxTokens;
        } else if (modelContextWindowMaxTokens !== undefined) {
-@@ -2171,9 +2262,7 @@ class ClaudeAgentSession implements AgentSession {
+@@ -2311,9 +2419,7 @@ class ClaudeAgentSession implements AgentSession {
      this.queryFactory = options.queryFactory;
      this.resolveBinary = options.resolveBinary;
      this.rewindSdk = options.rewindSdk ?? realClaudeRewindSdk;
 -    this.contextUsage = new ClaudeContextUsageState(
--      findClaudeModel(this.config.model)?.contextWindowMaxTokens,
+-      getClaudeContextWindowMaxTokens(this.config.model),
 -    );
 +    this.contextUsage = new ClaudeContextUsageState(this.resolveInitialContextWindowMaxTokens());
      const handle = options.handle;
  
      if (handle) {
-@@ -2503,9 +2592,7 @@ class ClaudeAgentSession implements AgentSession {
+@@ -2643,9 +2749,7 @@ class ClaudeAgentSession implements AgentSession {
      if (!claudeModelSupportsFastMode(this.config.model) && this.config.featureValues?.fast_mode) {
        await this.applyFastModeFeature(false, activeQuery);
      }
 -    this.contextUsage.setInitialContextWindowMaxTokens(
--      findClaudeModel(this.config.model)?.contextWindowMaxTokens,
+-      getClaudeContextWindowMaxTokens(this.config.model),
 -    );
 +    this.contextUsage.setInitialContextWindowMaxTokens(this.resolveInitialContextWindowMaxTokens());
      this.lastOptionsModel = normalizedModelId ?? this.lastOptionsModel;
      this.lastRuntimeModel = null;
      this.cachedRuntimeInfo = null;
-@@ -4783,6 +4870,15 @@ class ClaudeAgentSession implements AgentSession {
-       }
-       this.lastRuntimeModel = message.model;
-       this.cachedRuntimeInfo = null;
-+      const runtimeModel = findClaudeModel(message.model);
-+      const override = this.resolveConfiguredAutoCompactWindowOverride(
-+        runtimeModel?.id ?? message.model,
-+      );
-+      if (override !== undefined) {
-+        this.contextUsage.setInitialContextWindowMaxTokens(
-+          Math.min(override, runtimeModel?.contextWindowMaxTokens ?? override),
+@@ -4932,7 +5036,19 @@ class ClaudeAgentSession implements AgentSession {
+       // Seed usage before the first result, including settings-resolved aliases.
+       // A repeated init for the same model must retain the SDK's reported limit.
+       if (message.model !== this.lastRuntimeModel && runtimeContextWindowMaxTokens !== undefined) {
+-        this.contextUsage.setInitialContextWindowMaxTokens(runtimeContextWindowMaxTokens);
++        // A configured auto-compact window overrides the manifest window, capped at it. With no
++        // override the manifest window seeds only while nothing is known yet — a window already
++        // resolved from the configured model (ctor, setModel) must stand.
++        const override = this.resolveConfiguredAutoCompactWindowOverride(
++          findClaudeModel(message.model)?.id ?? message.model,
 +        );
-+      }
-     }
-     return { threadStartedSessionId, notice };
-   }
-@@ -4820,8 +4916,41 @@ class ClaudeAgentSession implements AgentSession {
++        if (override !== undefined) {
++          this.contextUsage.setInitialContextWindowMaxTokens(
++            Math.min(override, runtimeContextWindowMaxTokens),
++          );
++        } else if (!this.contextUsage.hasContextWindowMaxTokens()) {
++          this.contextUsage.setInitialContextWindowMaxTokens(runtimeContextWindowMaxTokens);
++        }
+       }
+       const normalizedRuntimeModel = normalizeClaudeRuntimeModelId(message.model);
+       this.logger.debug(
+@@ -4983,8 +5099,40 @@ class ClaudeAgentSession implements AgentSession {
      return null;
    }
  
@@ -732,25 +758,24 @@ index 3e938654e..0bc569c8e 100644
 +  /** Initial denominator before any SDK modelUsage arrives: the effective override if configured,
 +   * capped at the manifest model window, otherwise the manifest window itself. */
 +  private resolveInitialContextWindowMaxTokens(): number | undefined {
-+    const model = findClaudeModel(this.config.model);
-+    const modelWindow = model?.contextWindowMaxTokens;
++    const manifestWindow = getClaudeContextWindowMaxTokens(this.config.model);
 +    const override = this.resolveConfiguredAutoCompactWindowOverride(
-+      model?.id ?? this.config.model,
++      this.config.model ? (findClaudeModel(this.config.model)?.id ?? this.config.model) : undefined,
 +    );
 +    if (override === undefined) {
-+      return modelWindow;
++      return manifestWindow;
 +    }
-+    return modelWindow !== undefined ? Math.min(override, modelWindow) : override;
++    return manifestWindow !== undefined ? Math.min(override, manifestWindow) : override;
 +  }
 +
-   private convertUsage(message: SDKResultMessage, modelUsage?: unknown): AgentUsage | undefined {
--    return this.contextUsage.buildResultUsage(message, modelUsage);
+   private convertUsage(message: SDKResultMessage): AgentUsage | undefined {
+-    return this.contextUsage.buildResultUsage(message, this.lastRuntimeModel ?? this.config.model);
 +    const primaryModelId = this.lastRuntimeModel ?? this.config.model;
 +    return this.contextUsage.buildResultUsage(
 +      message,
-+      modelUsage,
++      this.lastRuntimeModel ?? this.config.model,
 +      this.resolveUsageModelAutoCompactOverride,
-+      findClaudeModel(primaryModelId)?.id ?? primaryModelId,
++      primaryModelId ? (findClaudeModel(primaryModelId)?.id ?? primaryModelId) : undefined,
 +    );
    }
  

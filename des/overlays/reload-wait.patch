@@ -1,8 +1,8 @@
 diff --git a/packages/server/src/server/agent/agent-manager.test.ts b/packages/server/src/server/agent/agent-manager.test.ts
-index 6396fc589..5ec2df0af 100644
+index 44e38a344..25745929b 100644
 --- a/packages/server/src/server/agent/agent-manager.test.ts
 +++ b/packages/server/src/server/agent/agent-manager.test.ts
-@@ -2582,6 +2582,132 @@ test("failed reload retains the closed agent for a later resume", async () => {
+@@ -2587,6 +2587,132 @@ test("failed reload retains the closed agent for a later resume", async () => {
    }
  });
  
@@ -136,10 +136,10 @@ index 6396fc589..5ec2df0af 100644
    "reload does not resume when the previous session close fails: %s",
    async (failure) => {
 diff --git a/packages/server/src/server/agent/agent-manager.ts b/packages/server/src/server/agent/agent-manager.ts
-index 9e809a457..c9bb7b5e0 100644
+index a15d94389..ec424659b 100644
 --- a/packages/server/src/server/agent/agent-manager.ts
 +++ b/packages/server/src/server/agent/agent-manager.ts
-@@ -383,6 +383,35 @@ function resolveInitialAttention(input: AttentionState | undefined): AttentionSt
+@@ -387,6 +387,35 @@ function resolveInitialAttention(input: AttentionState | undefined): AttentionSt
    };
  }
  
@@ -175,7 +175,7 @@ index 9e809a457..c9bb7b5e0 100644
  interface StreamEventFlags {
    shouldDispatchEvent: boolean;
    shouldNotifyWaiters: boolean;
-@@ -1176,6 +1205,16 @@ export class AgentManager {
+@@ -1212,6 +1241,16 @@ export class AgentManager {
      await this.inFlightAgentCloses?.get(agentId)?.catch(() => undefined);
    }
  
@@ -192,7 +192,7 @@ index 9e809a457..c9bb7b5e0 100644
    getTimeline(id: string): AgentTimelineItem[] {
      this.requireAgent(id);
      return this.timelineStore.getItems(id);
-@@ -1522,8 +1561,8 @@ export class AgentManager {
+@@ -1558,8 +1597,8 @@ export class AgentManager {
      const rehydrateFromDisk = options?.rehydrateFromDisk ?? false;
      const preservedHistoryPrimed = existing.historyPrimed;
      const preservedLastUsage = existing.lastUsage;
@@ -204,10 +204,10 @@ index 9e809a457..c9bb7b5e0 100644
      const provider = handle?.provider ?? existing.provider;
      const client = this.requireClient(provider);
 diff --git a/packages/server/src/server/session.test.ts b/packages/server/src/server/session.test.ts
-index dd25afa34..a89de44cb 100644
+index 299a6f3e4..22b8b16bf 100644
 --- a/packages/server/src/server/session.test.ts
 +++ b/packages/server/src/server/session.test.ts
-@@ -6142,3 +6142,87 @@ describe("agent-created SUB workspace label overlay", () => {
+@@ -6266,3 +6266,90 @@ describe("agent-created SUB workspace label overlay", () => {
      }
    });
  });
@@ -247,7 +247,10 @@ index dd25afa34..a89de44cb 100644
 +  const getAgent = vi.fn(
 +    () => null as NonNullable<ReturnType<SessionOptions["agentManager"]["getAgent"]>> | null,
 +  );
-+  getAgent.mockReturnValueOnce(null).mockReturnValue(liveAgent);
++  // 0.12: resolveAgentIdentifier consults the live map first, then the reload
++  // guard reads it again — both must see the agent absent while the reload is
++  // in flight; only after it settles is the agent live.
++  getAgent.mockReturnValueOnce(null).mockReturnValueOnce(null).mockReturnValue(liveAgent);
 +
 +  const messages: SessionOutboundMessage[] = [];
 +  const session = createSessionForTest({
@@ -296,10 +299,10 @@ index dd25afa34..a89de44cb 100644
 +  expect(response?.payload.lastMessage).toBe("post-reload answer");
 +});
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index a3464221d..bfe0281b1 100644
+index c0e3ab03a..0c626eeb1 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -8207,6 +8207,12 @@ export class Session {
+@@ -8353,6 +8353,12 @@ export class Session {
      }
  
      const agentId = resolved.agentId;
@@ -311,4 +314,4 @@ index a3464221d..bfe0281b1 100644
 +    }
      const live = this.agentManager.getAgent(agentId);
      if (!live) {
-       const record = await this.agentStorage.get(agentId);
+       const settled = await this.readSettledAgent(agentId);
