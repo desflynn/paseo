@@ -313,6 +313,26 @@ export class ClaudeTaskProtocolSource {
     return observations;
   }
 
+  /**
+   * Terminalize the subagents a successfully finished turn was still running in the foreground.
+   *
+   * A turn that ends in success has no foreground child left working: anything still declared
+   * "running" finished alongside it, and Claude's own `task_notification` may never arrive.
+   * Backgrounded children are skipped — they were told to outlive the turn. Like the cancel path
+   * this reports statuses and leaves the routing intact, so a late notification stays free to
+   * correct the guess (the dedupe in `observeStatus` makes the redundant one a no-op).
+   */
+  completeRunningForegroundTasks(): SubagentObservation[] {
+    const observations: SubagentObservation[] = [];
+    for (const id of this.declaredIds) {
+      if (this.backgroundedIds.has(id)) continue;
+      if (this.lastStatusById.get(id) !== "running") continue;
+      this.lastStatusById.set(id, "completed");
+      observations.push({ kind: "status", id, status: "completed" });
+    }
+    return observations;
+  }
+
   /** A lost Claude process terminates every task it owned, including backgrounded workflows. */
   failRunningTasks(): SubagentObservation[] {
     const observations: SubagentObservation[] = [];
