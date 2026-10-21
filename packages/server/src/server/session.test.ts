@@ -1634,6 +1634,125 @@ describe("agent detach RPC", () => {
       },
     });
   });
+
+  test("detaching an agent alone in its workspace clears the SUB overlay", async () => {
+    const childAfter = createStoredAgentRecord({
+      id: "child-agent",
+      cwd: "/tmp/child",
+      workspaceId: "workspace-child",
+      labels: {},
+    });
+    const workspace = {
+      workspaceId: "workspace-child",
+      projectId: "project-child",
+      cwd: "/tmp/child",
+      kind: "worktree" as const,
+      displayName: "Child workspace",
+      title: null,
+      branch: "child",
+      baseBranch: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+    };
+    const project = {
+      projectId: "project-child",
+      rootPath: "/tmp/child",
+      kind: "git" as const,
+      displayName: "Project",
+      customName: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+    };
+    const setAssignment = vi.fn(async (input: { label: { name: string } }) => ({
+      label: input.label,
+      workspaceLabels: [],
+    }));
+    const detachAgent = vi.fn().mockResolvedValue({
+      record: childAfter,
+      live: false,
+      previousParentAgentId: "parent-agent",
+    });
+
+    const session = createSessionForTest({
+      agentManager: {
+        getAgent: vi.fn(() => null),
+        detachAgent,
+        // Post-detach the child is alone in its workspace.
+        listAgents: vi.fn(() => [{ id: "child-agent", workspaceId: "workspace-child" }]),
+      },
+      agentStorage: {
+        list: vi.fn().mockResolvedValue([]),
+        get: vi.fn().mockResolvedValue(null),
+      },
+      workspaceRegistry: {
+        get: vi.fn().mockResolvedValue(workspace),
+        list: vi.fn().mockResolvedValue([workspace]),
+      },
+      projectRegistry: {
+        get: vi.fn().mockResolvedValue(project),
+        list: vi.fn().mockResolvedValue([project]),
+      },
+      workspaceLabelService: { setAssignment } as unknown as WorkspaceLabelService,
+    });
+
+    await session.handleMessage({
+      type: "agent.detach.request",
+      agentId: "child-agent",
+      requestId: "detach-sub-1",
+    });
+
+    expect(detachAgent).toHaveBeenCalledWith("child-agent");
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: "workspace-child",
+      label: { name: "SUB", color: "sky" },
+      assigned: false,
+    });
+  });
+
+  test("detaching an agent in an occupied workspace does not clear SUB", async () => {
+    const childAfter = createStoredAgentRecord({
+      id: "child-agent",
+      cwd: "/tmp/child",
+      workspaceId: "workspace-child",
+      labels: {},
+    });
+    const setAssignment = vi.fn(async (input: { label: { name: string } }) => ({
+      label: input.label,
+      workspaceLabels: [],
+    }));
+    const detachAgent = vi.fn().mockResolvedValue({
+      record: childAfter,
+      live: false,
+      previousParentAgentId: "parent-agent",
+    });
+
+    const session = createSessionForTest({
+      agentManager: {
+        getAgent: vi.fn(() => null),
+        detachAgent,
+        // Another live agent shares the workspace: the SUB label stays.
+        listAgents: vi.fn(() => [
+          { id: "child-agent", workspaceId: "workspace-child" },
+          { id: "sibling-agent", workspaceId: "workspace-child" },
+        ]),
+      },
+      agentStorage: {
+        list: vi.fn().mockResolvedValue([]),
+        get: vi.fn().mockResolvedValue(null),
+      },
+      workspaceLabelService: { setAssignment } as unknown as WorkspaceLabelService,
+    });
+
+    await session.handleMessage({
+      type: "agent.detach.request",
+      agentId: "child-agent",
+      requestId: "detach-sub-2",
+    });
+
+    expect(setAssignment).not.toHaveBeenCalled();
+  });
 });
 
 function createProjectRecord(rootPath: string, archivedAt: string | null = null) {
@@ -6000,6 +6119,148 @@ describe("owner MINE workspace label overlay", () => {
         assigned: true,
       });
       expect((await registry.get("ws-1"))?.labels).toEqual(["MINE"]);
+    } finally {
+      rmSync(paseoHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("agent-created SUB workspace label overlay", () => {
+  const SUB_LABEL = { name: "SUB", color: "sky" as const };
+
+  function createLabelRecordingService(): {
+    setAssignment: ReturnType<typeof vi.fn>;
+    service: WorkspaceLabelService;
+  } {
+    const setAssignment = vi.fn(
+      async (input: {
+        workspaceId: string;
+        label: { name: string; color: string };
+        assigned: boolean;
+      }) => ({
+        label: input.label,
+        workspaceLabels: input.assigned ? [input.label.name] : [],
+      }),
+    );
+    return { setAssignment, service: { setAssignment } as unknown as WorkspaceLabelService };
+  }
+
+  function creationServiceReturning(agent: { id: string; workspaceId: string } | null) {
+    return {
+      create: vi.fn(async () => ({
+        kind: "agent",
+        idempotencyKey: "request-create",
+        revision: 0,
+        phase: "completed",
+        workspaceId: agent?.workspaceId ?? "ws-1",
+        agentId: agent?.id ?? null,
+        agent: agent ?? null,
+        error: null,
+      })),
+      subscribe: vi.fn(),
+    } as unknown as SessionOptions["creationService"];
+  }
+
+  function sendCreateRequest(requestId: string) {
+    return {
+      type: "agent.create.request" as const,
+      requestId,
+      config: { provider: "codex", cwd: "/tmp/repo" },
+    } as unknown as SessionInboundMessage;
+  }
+
+  test("a cli session creating an agent alone in its workspace labels the workspace SUB", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({
+      clientType: "cli",
+      messages,
+      workspaceLabelService: service,
+      creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
+    });
+
+    await session.handleMessage(sendCreateRequest("request-sub-create"));
+
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      label: SUB_LABEL,
+      assigned: true,
+    });
+    expect(messages.some((message) => message.type === "agent.create.response")).toBe(true);
+  });
+
+  test("a cli session creating an agent into an occupied workspace does not label SUB", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const session = createSessionForTest({
+      clientType: "cli",
+      workspaceLabelService: service,
+      creationService: creationServiceReturning({ id: "agent-2", workspaceId: "ws-1" }),
+      agentManager: {
+        listAgents: vi.fn(() => [{ id: "agent-1", workspaceId: "ws-1", internal: false }]),
+      },
+    });
+
+    await session.handleMessage(sendCreateRequest("request-sub-occupied"));
+
+    expect(setAssignment).not.toHaveBeenCalled();
+  });
+
+  test("a mobile session creating an agent alone gets MINE only, never SUB", async () => {
+    const { setAssignment, service } = createLabelRecordingService();
+    const session = createSessionForTest({
+      clientType: "mobile",
+      workspaceLabelService: service,
+      creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
+    });
+
+    await session.handleMessage(sendCreateRequest("request-mobile-sub"));
+
+    expect(setAssignment).toHaveBeenCalledTimes(1);
+    expect(setAssignment).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      label: { name: "MINE", color: "indigo" },
+      assigned: true,
+    });
+  });
+
+  test("labeling an already-SUB workspace keeps exactly one SUB", async () => {
+    const paseoHome = mkdtempSync(join(tmpdir(), "paseo-sub-"));
+    try {
+      const registry = new FileBackedWorkspaceRegistry(
+        join(paseoHome, "projects", "workspaces.json"),
+        pino({ level: "silent" }),
+      );
+      await registry.upsert(
+        createPersistedWorkspaceRecord({
+          workspaceId: "ws-1",
+          projectId: "prj-1",
+          cwd: "/repo",
+          kind: "local_checkout",
+          displayName: "main",
+          createdAt: "2026-10-04T00:00:00.000Z",
+          updatedAt: "2026-10-04T00:00:00.000Z",
+        }),
+      );
+      const labelService = createWorkspaceLabelService({
+        paseoHome,
+        workspaceRegistry: registry,
+      });
+      await labelService.setAssignment({ workspaceId: "ws-1", label: SUB_LABEL, assigned: true });
+      const setAssignment = vi.spyOn(labelService, "setAssignment");
+      const session = createSessionForTest({
+        clientType: "cli",
+        workspaceLabelService: labelService,
+        creationService: creationServiceReturning({ id: "agent-1", workspaceId: "ws-1" }),
+      });
+
+      await session.handleMessage(sendCreateRequest("request-sub-repeat"));
+
+      expect(setAssignment).toHaveBeenCalledWith({
+        workspaceId: "ws-1",
+        label: SUB_LABEL,
+        assigned: true,
+      });
+      expect((await registry.get("ws-1"))?.labels).toEqual(["SUB"]);
     } finally {
       rmSync(paseoHome, { recursive: true, force: true });
     }
