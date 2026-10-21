@@ -137,6 +137,82 @@ describe("estimateStreamItemHeight", () => {
     ).toBe(40);
   });
 
+  it("estimates a claimed plugin row from its own kind, not the default", () => {
+    // A plugin row replaces a native row, so its estimate must follow what it
+    // replaced. Without this the virtualizer guesses 120px for every claimed
+    // row and paging back into unmeasured history lands on empty space.
+    const pluginItem = (itemKind: string, data: unknown, seed: number): StreamItem => ({
+      kind: "plugin",
+      id: `plugin-${itemKind}-${seed}`,
+      timestamp: createTimestamp(seed),
+      pluginId: "semantic-markdown",
+      pluginItemId: `item-${seed}`,
+      itemKind,
+      version: 1,
+      data: data as never,
+    });
+
+    const markdown = "# Heading\n\n".repeat(40);
+    const claimedMessage = pluginItem("semantic-markdown", { text: markdown }, 1);
+    const nativeMessage: StreamItem = {
+      kind: "assistant_message",
+      id: "assistant-1",
+      text: markdown,
+      timestamp: createTimestamp(1),
+    };
+    expect(
+      estimateStreamItemHeight({
+        item: claimedMessage,
+        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
+      }),
+    ).toBe(
+      estimateStreamItemHeight({
+        item: nativeMessage,
+        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
+      }),
+    );
+
+    // A claimed tool row is one line at native tool-row height.
+    const claimedTool = pluginItem(
+      "semantic-markdown-tool-call",
+      { callId: "c1", name: "Bash", status: "completed", label: "Bash" },
+      2,
+    );
+    expect(
+      estimateStreamItemHeight({
+        item: claimedTool,
+        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
+      }),
+    ).toBe(
+      estimateStreamItemHeight({
+        item: toolCall("tool", 2),
+        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
+      }),
+    );
+
+    // The diagnostic row is small: the collapsed row constant is close enough.
+    const claimedError = pluginItem("semantic-markdown-load-error", { text: "boom" }, 3);
+    expect(
+      estimateStreamItemHeight({
+        item: claimedError,
+        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
+      }),
+    ).toBe(
+      estimateStreamItemHeight({
+        item: toolCall("tool", 3),
+        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
+      }),
+    );
+
+    // A plugin row this app does not know keeps the existing default.
+    expect(
+      estimateStreamItemHeight({
+        item: pluginItem("someone-elses-row", { text: "x" }, 4),
+        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
+      }),
+    ).toBe(120);
+  });
+
   it("uses a larger estimate for user messages with image attachments", () => {
     const item: StreamItem = {
       kind: "user_message",

@@ -1,0 +1,157 @@
+diff --git a/packages/app/src/agent-stream/web-virtualization.test.ts b/packages/app/src/agent-stream/web-virtualization.test.ts
+index 602925faa..6588a030d 100644
+--- a/packages/app/src/agent-stream/web-virtualization.test.ts
++++ b/packages/app/src/agent-stream/web-virtualization.test.ts
+@@ -137,6 +137,82 @@ describe("estimateStreamItemHeight", () => {
+     ).toBe(40);
+   });
+ 
++  it("estimates a claimed plugin row from its own kind, not the default", () => {
++    // A plugin row replaces a native row, so its estimate must follow what it
++    // replaced. Without this the virtualizer guesses 120px for every claimed
++    // row and paging back into unmeasured history lands on empty space.
++    const pluginItem = (itemKind: string, data: unknown, seed: number): StreamItem => ({
++      kind: "plugin",
++      id: `plugin-${itemKind}-${seed}`,
++      timestamp: createTimestamp(seed),
++      pluginId: "semantic-markdown",
++      pluginItemId: `item-${seed}`,
++      itemKind,
++      version: 1,
++      data: data as never,
++    });
++
++    const markdown = "# Heading\n\n".repeat(40);
++    const claimedMessage = pluginItem("semantic-markdown", { text: markdown }, 1);
++    const nativeMessage: StreamItem = {
++      kind: "assistant_message",
++      id: "assistant-1",
++      text: markdown,
++      timestamp: createTimestamp(1),
++    };
++    expect(
++      estimateStreamItemHeight({
++        item: claimedMessage,
++        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
++      }),
++    ).toBe(
++      estimateStreamItemHeight({
++        item: nativeMessage,
++        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
++      }),
++    );
++
++    // A claimed tool row is one line at native tool-row height.
++    const claimedTool = pluginItem(
++      "semantic-markdown-tool-call",
++      { callId: "c1", name: "Bash", status: "completed", label: "Bash" },
++      2,
++    );
++    expect(
++      estimateStreamItemHeight({
++        item: claimedTool,
++        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
++      }),
++    ).toBe(
++      estimateStreamItemHeight({
++        item: toolCall("tool", 2),
++        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
++      }),
++    );
++
++    // The diagnostic row is small: the collapsed row constant is close enough.
++    const claimedError = pluginItem("semantic-markdown-load-error", { text: "boom" }, 3);
++    expect(
++      estimateStreamItemHeight({
++        item: claimedError,
++        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
++      }),
++    ).toBe(
++      estimateStreamItemHeight({
++        item: toolCall("tool", 3),
++        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
++      }),
++    );
++
++    // A plugin row this app does not know keeps the existing default.
++    expect(
++      estimateStreamItemHeight({
++        item: pluginItem("someone-elses-row", { text: "x" }, 4),
++        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
++      }),
++    ).toBe(120);
++  });
++
+   it("uses a larger estimate for user messages with image attachments", () => {
+     const item: StreamItem = {
+       kind: "user_message",
+diff --git a/packages/app/src/agent-stream/web-virtualization.ts b/packages/app/src/agent-stream/web-virtualization.ts
+index 0c7f75695..8c223ec6b 100644
+--- a/packages/app/src/agent-stream/web-virtualization.ts
++++ b/packages/app/src/agent-stream/web-virtualization.ts
+@@ -1,5 +1,5 @@
+ import type { AssistantImageContext } from "@/utils/assistant-image-metadata";
+-import type { StreamItem } from "@/types/stream";
++import type { PluginTimelineStreamItem, StreamItem } from "@/types/stream";
+ import { estimateAssistantMessageHeightFromCache } from "@/utils/assistant-message-height-estimate";
+ import {
+   DEFAULT_MOUNTED_RECENT_STREAM_ITEMS,
+@@ -50,6 +50,49 @@ interface StreamItemHeightEstimateInput {
+   imageContext?: AssistantImageContext;
+ }
+ 
++// The text a plugin row carries, when its payload is message-shaped. The
++// payload is opaque JSON, so read defensively and let a miss fall through.
++function pluginItemText(data: unknown): string | null {
++  if (data === null || typeof data !== "object") return null;
++  const text = (data as { text?: unknown }).text;
++  return typeof text === "string" ? text : null;
++}
++
++// A plugin row replaces a native row, so it must be estimated as the row it
++// replaced. Claimed assistant messages are the case that matters: they carry
++// full markdown and run to hundreds or thousands of pixels, so the old default
++// guess of 120px left the virtualizer's offsets far out and paging back into
++// unmeasured history landed on empty space (Des, 2026-10-19).
++// Kinds a plugin other than the one below emits keep the previous default, so
++// this cannot change another plugin's behaviour.
++function estimatePluginItemHeight({
++  item,
++  contentMaxWidth,
++  imageContext,
++}: {
++  item: PluginTimelineStreamItem;
++  contentMaxWidth: number;
++  imageContext?: AssistantImageContext;
++}): number {
++  switch (item.itemKind) {
++    case "semantic-markdown": {
++      const text = pluginItemText(item.data);
++      if (text === null) return 220;
++      return (
++        estimateAssistantMessageHeightFromCache({ markdown: text, contentMaxWidth, imageContext }) ??
++        220
++      );
++    }
++    // One line at native tool-row height.
++    case "semantic-markdown-tool-call":
++    // A few lines of diagnostic; the collapsed row is close enough.
++    case "semantic-markdown-load-error":
++      return COLLAPSED_TOOL_SEQUENCE_ROW_HEIGHT_ESTIMATE;
++    default:
++      return 120;
++  }
++}
++
+ export function estimateStreamItemHeight({
+   item,
+   contentMaxWidth,
+@@ -76,6 +119,8 @@ export function estimateStreamItemHeight({
+       return 88;
+     case "compaction":
+       return 72;
++    case "plugin":
++      return estimatePluginItemHeight({ item, contentMaxWidth, imageContext });
+     default:
+       return 120;
+   }
