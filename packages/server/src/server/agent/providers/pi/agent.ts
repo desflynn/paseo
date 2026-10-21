@@ -31,6 +31,7 @@ import {
   type AgentSlashCommand,
   type AgentSlashCommandKind,
   type AgentStreamEvent,
+  type AgentUsage,
   type FetchCatalogOptions,
   type SteerActiveTurnOptions,
   type SteerResult,
@@ -1200,6 +1201,9 @@ export class PiRpcAgentSession implements AgentSession {
   private readonly currentModeId: string | null;
   private readonly logger: Logger;
   private readonly usagePoller: PiUsagePoller;
+  // Latest usage the poller published for this session; backs the context
+  // figures in auto-compaction failure messages.
+  private latestContextUsage: AgentUsage | null = null;
   private closed = false;
   private readonly closeController = new AbortController();
   private readonly pendingExtensionHydrations = new Set<Promise<void>>();
@@ -1239,6 +1243,7 @@ export class PiRpcAgentSession implements AgentSession {
       scheduler: options.usagePollScheduler,
       readStats: () => this.runtimeSession.getSessionStats(),
       onUsage: (usage, turnId) => {
+        this.latestContextUsage = usage;
         this.emit({
           type: "usage_updated",
           provider: this.provider,
@@ -2247,14 +2252,7 @@ export class PiRpcAgentSession implements AgentSession {
         });
         return;
       case "compaction_end":
-        this.emitCompactionTimeline({
-          turnId,
-          item: {
-            type: "compaction",
-            status: "completed",
-            trigger: event.reason === "manual" ? "manual" : "auto",
-          },
-        });
+        this.handleCompactionEnd(event, turnId);
         return;
       case "auto_retry_start":
         this.emit({
@@ -2313,6 +2311,52 @@ export class PiRpcAgentSession implements AgentSession {
       result,
     });
     this.emitToolCallEvent(event.toolCallId, toolCall, status, result, error);
+  }
+
+  private handleCompactionEnd(
+    event: Extract<PiAgentSessionEvent, { type: "compaction_end" }>,
+    turnId: string | undefined,
+  ): void {
+    const trigger = event.reason === "manual" ? "manual" : "auto";
+    const failed = event.errorMessage !== undefined || event.aborted === true;
+    // The protocol compaction item has no failure status (status is "loading" |
+    // "completed"), so a failed or aborted compaction closes its loading item
+    // the same way as a successful one and the failure is surfaced through the
+    // error item below instead.
+    this.emitCompactionTimeline({
+      turnId,
+      item: {
+        type: "compaction",
+        status: "completed",
+        trigger,
+      },
+    });
+    if (!failed || trigger === "manual") {
+      // Successful compactions need nothing further. Manual failures already
+      // surface through the compact RPC catch path as "[Error] Failed to
+      // compact context: ..."; don't duplicate them.
+      return;
+    }
+    // Pi's compaction events carry no token figures; fall back to the latest
+    // usage the poller published for this session.
+    const used = this.latestContextUsage?.contextWindowUsedTokens;
+    const max = this.latestContextUsage?.contextWindowMaxTokens;
+    let usageSuffix = "";
+    if (typeof used === "number" && typeof max === "number") {
+      usageSuffix = ` at ${used.toLocaleString("en-US")} / ${max.toLocaleString("en-US")} tokens`;
+    } else if (typeof used === "number") {
+      usageSuffix = ` at ${used.toLocaleString("en-US")} tokens`;
+    }
+    const text = event.aborted
+      ? `[Error] Auto compaction aborted${usageSuffix}`
+      : `[Error] Auto compaction failed${usageSuffix}: ${event.errorMessage ?? "unknown error"}`;
+    this.emitCompactionTimeline({
+      turnId,
+      item: {
+        type: "assistant_message",
+        text,
+      },
+    });
   }
 
   private emitCompactionTimeline(input: {
