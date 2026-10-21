@@ -93,3 +93,9 @@ app.json
 
 # Heap snapshots dumped by --heapsnapshot-near-heap-limit; keep them for debugging.
 *.heapsnapshot
+
+# DCI harness bridge files, written per machine (hooks are symlinks into dci-harness dist)
+.codex/config.toml
+.codex/hooks.json
+.codex/hooks/
+.pi/mcp.json
