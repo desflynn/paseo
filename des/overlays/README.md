@@ -25,7 +25,6 @@ git apply --3way des/overlays/pi-compaction-status.patch
 git apply --3way des/overlays/claude-stale-subagent.patch
 git apply --3way des/overlays/pi-mcp-labels.patch
 git apply --3way des/overlays/claude-auto-compact-window.patch
-git apply --3way des/overlays/plugin-row-height.patch
 npm install                 # approve exact resolved install-script versions, see overlay 1
 npm run build:desktop        # from the repo root; installation is a separate owner action
 ```
@@ -196,27 +195,3 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
 - Seed first-stream usage from SDK init and keep helper model usage from inflating the primary
   configured window. Token accounting and the percentage trigger override stay unchanged.
 - Evidence: `../claude-auto-compact-window/WORKING-LOG.md`; 101 focused cases GREEN.
-
-## 12. Plugin row height estimate
-
-- Patch: `plugin-row-height.patch`. Applies to `v0.11.1` on its own.
-- A plugin that claims a timeline row replaces a native row with `kind: "plugin"`, and
-  `estimateStreamItemHeight` had no case for it, so every claimed row was estimated at the
-  `default: 120` whatever it was. Claimed assistant messages carry full markdown and run to
-  thousands of pixels, so the virtualizer's offsets went far out and paging back into unmeasured
-  history landed on empty space with a dead scrollbar (Des, 2026-10-19).
-- What it must achieve: in `packages/app/src/agent-stream/web-virtualization.ts`, add a `plugin`
-  case that estimates by the row's `itemKind` instead of the default. `semantic-markdown` takes
-  `data.text` through `estimateAssistantMessageHeightFromCache`, falling back to the native
-  assistant estimate of 220 when the cache misses. `semantic-markdown-tool-call` and
-  `semantic-markdown-load-error` take the collapsed tool-row constant. Any other `itemKind`
-  keeps 120, so another plugin's rows are unaffected.
-- `PluginTimelineStreamItem.data` is opaque JSON with no height field, so the payload is read
-  defensively; a plugin cannot yet declare its own height. That would need a protocol addition
-  and is deliberately not in this patch.
-- A tool run renders one host row and its other members return null, so a null member's real
-  height is 0 against a non-zero estimate. Left alone on purpose: the members sit together, so
-  the error cancels across one run and is bounded by that run, not by the message case.
-- Evidence: `web-virtualization.test.ts` (one new case pinning all four kinds, plus the untouched
-  default); suite 9/9, app typecheck clean, and `git apply --cached --check` against `v0.11.1`.
-  Not yet proved: the `-df` build and a long-chat page-back, which PSR Head Guy runs.

@@ -1,5 +1,5 @@
 import type { AssistantImageContext } from "@/utils/assistant-image-metadata";
-import type { PluginTimelineStreamItem, StreamItem } from "@/types/stream";
+import type { StreamItem } from "@/types/stream";
 import { estimateAssistantMessageHeightFromCache } from "@/utils/assistant-message-height-estimate";
 import {
   DEFAULT_MOUNTED_RECENT_STREAM_ITEMS,
@@ -50,52 +50,6 @@ interface StreamItemHeightEstimateInput {
   imageContext?: AssistantImageContext;
 }
 
-// The text a plugin row carries, when its payload is message-shaped. The
-// payload is opaque JSON, so read defensively and let a miss fall through.
-function pluginItemText(data: unknown): string | null {
-  if (data === null || typeof data !== "object") return null;
-  const text = (data as { text?: unknown }).text;
-  return typeof text === "string" ? text : null;
-}
-
-// A plugin row replaces a native row, so it must be estimated as the row it
-// replaced. Claimed assistant messages are the case that matters: they carry
-// full markdown and run to hundreds or thousands of pixels, so the old default
-// guess of 120px left the virtualizer's offsets far out and paging back into
-// unmeasured history landed on empty space (Des, 2026-10-19).
-// Kinds a plugin other than the one below emits keep the previous default, so
-// this cannot change another plugin's behaviour.
-function estimatePluginItemHeight({
-  item,
-  contentMaxWidth,
-  imageContext,
-}: {
-  item: PluginTimelineStreamItem;
-  contentMaxWidth: number;
-  imageContext?: AssistantImageContext;
-}): number {
-  switch (item.itemKind) {
-    case "semantic-markdown": {
-      const text = pluginItemText(item.data);
-      if (text === null) return 220;
-      return (
-        estimateAssistantMessageHeightFromCache({
-          markdown: text,
-          contentMaxWidth,
-          imageContext,
-        }) ?? 220
-      );
-    }
-    // One line at native tool-row height.
-    case "semantic-markdown-tool-call":
-    // A few lines of diagnostic; the collapsed row is close enough.
-    case "semantic-markdown-load-error":
-      return COLLAPSED_TOOL_SEQUENCE_ROW_HEIGHT_ESTIMATE;
-    default:
-      return 120;
-  }
-}
-
 export function estimateStreamItemHeight({
   item,
   contentMaxWidth,
@@ -122,8 +76,6 @@ export function estimateStreamItemHeight({
       return 88;
     case "compaction":
       return 72;
-    case "plugin":
-      return estimatePluginItemHeight({ item, contentMaxWidth, imageContext });
     default:
       return 120;
   }
