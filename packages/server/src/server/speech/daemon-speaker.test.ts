@@ -15,7 +15,8 @@ const tts: TextToSpeechProvider = {
 function createClients(count: number) {
   const received: SessionOutboundMessage[][] = Array.from({ length: count }, () => []);
   const sessions = received.map((messages) => ({
-    emitServerMessage: (message: SessionOutboundMessage) => {
+    isAppClient: () => true,
+    sendToAllSources: (message: SessionOutboundMessage) => {
       messages.push(message);
     },
   }));
@@ -24,7 +25,10 @@ function createClients(count: number) {
 
 function createSpeaker(options: {
   tts?: TextToSpeechProvider | null;
-  sessions: Array<{ emitServerMessage: (message: SessionOutboundMessage) => void }>;
+  sessions: Array<{
+    isAppClient: () => boolean;
+    sendToAllSources: (message: SessionOutboundMessage) => void;
+  }>;
   playbackTimeoutMs?: number;
 }) {
   return createDaemonSpeaker({
@@ -71,6 +75,30 @@ describe("createDaemonSpeaker", () => {
     await expect(speaker.speak({ text: "Hello.", callerAgentId: "agent-1" })).rejects.toThrow(
       "No app client is connected",
     );
+  });
+
+  it("ignores plugin and CLI sessions: they neither count as clients nor get the audio", async () => {
+    const plugin: SessionOutboundMessage[] = [];
+    const pluginSession = {
+      isAppClient: () => false,
+      sendToAllSources: (message: SessionOutboundMessage) => {
+        plugin.push(message);
+      },
+    };
+    const noApp = createSpeaker({ sessions: [pluginSession] });
+    await expect(noApp.speak({ text: "Hello.", callerAgentId: "agent-1" })).rejects.toThrow(
+      "No app client is connected",
+    );
+
+    const { received, sessions } = createClients(1);
+    const speaker = createSpeaker({ sessions: [pluginSession, ...sessions] });
+    const playback = speaker.speak({ text: "Hello.", callerAgentId: "agent-1" });
+    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
+    const message = received[0][0];
+    if (message.type !== "audio_output") throw new Error("expected audio_output");
+    speaker.confirmAudioPlayed(message.payload.id);
+    await playback;
+    expect(plugin).toHaveLength(0);
   });
 
   it("rejects when TTS is not configured", async () => {

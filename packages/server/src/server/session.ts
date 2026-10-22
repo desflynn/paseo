@@ -1570,8 +1570,18 @@ export class Session {
     };
   }
 
+  public isAppClient(): boolean {
+    return this.clientType === "mobile" || this.clientType === "browser";
+  }
+
   public emitServerMessage(message: SessionOutboundMessage): void {
     this.emit(message);
+  }
+
+  /** Daemon-originated message for every socket of this session, whatever request it came from. */
+  public sendToAllSources(message: SessionOutboundMessage): void {
+    if (!this.authorization.allowsOutbound(message)) return;
+    this.delivery.broadcast(message);
   }
 
   /**

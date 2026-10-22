@@ -9,7 +9,9 @@ import type { TextToSpeechProvider } from "./speech-provider.js";
 const DEFAULT_PLAYBACK_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface DaemonSpeakerSession {
-  emitServerMessage(message: SessionOutboundMessage): void;
+  /** Mobile and browser/desktop app sessions play audio; plugin, CLI and MCP sessions do not. */
+  isAppClient(): boolean;
+  sendToAllSources(message: SessionOutboundMessage): void;
 }
 
 export interface DaemonSpeaker {
@@ -33,12 +35,13 @@ export function createDaemonSpeaker(options: {
   const { logger, resolveTts, listSessions } = options;
   const playbackTimeoutMs = options.playbackTimeoutMs ?? DEFAULT_PLAYBACK_TIMEOUT_MS;
   const ttsManager = new TTSManager("daemon-speaker", logger, resolveTts);
+  const listAppSessions = () => listSessions().filter((session) => session.isAppClient());
 
   const speak: VoiceSpeakHandler = async ({ text, callerAgentId, signal }) => {
     if (!resolveTts()) {
       throw new Error("TTS not configured");
     }
-    if (listSessions().length === 0) {
+    if (listAppSessions().length === 0) {
       throw new Error("No app client is connected to play speech");
     }
     logger.info({ agentId: callerAgentId, textLength: text.length }, "Daemon speak tool call");
@@ -48,8 +51,13 @@ export function createDaemonSpeaker(options: {
     await ttsManager.generateAndWaitForPlayback(
       text,
       (message) => {
-        for (const session of listSessions()) {
-          session.emitServerMessage(message);
+        const sessions = listAppSessions();
+        logger.info(
+          { agentId: callerAgentId, messageType: message.type, appClients: sessions.length },
+          "Daemon speak sending audio to app clients",
+        );
+        for (const session of sessions) {
+          session.sendToAllSources(message);
         }
       },
       abortSignal,
@@ -60,5 +68,12 @@ export function createDaemonSpeaker(options: {
     }
   };
 
-  return { speak, confirmAudioPlayed: (chunkId) => ttsManager.confirmAudioPlayed(chunkId) };
+  return {
+    speak,
+    confirmAudioPlayed: (chunkId) => {
+      const known = ttsManager.confirmAudioPlayed(chunkId);
+      if (known) logger.info({ chunkId }, "Daemon speak playback confirmed by an app client");
+      return known;
+    },
+  };
 }
