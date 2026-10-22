@@ -242,6 +242,9 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
   buffers the group and plays it once. Per-sentence clips let a car's Bluetooth drop to the
   radio between sentences and clipped the first words of the next one. Voice mode keeps
   per-sentence playback. The speak tool text also tells agents to send the whole report in one call.
+  The first chunk of a report starts with two seconds of silence (PCM only,
+  `leadInSilence` in `tts-manager.ts`): a car or phone is still routing audio to Bluetooth when
+  the clip starts and otherwise clips the first words.
 - A modern app socket drops any message nobody owns (`SessionDelivery.permits`), so the
   speaker sends through the new `SessionDelivery.broadcast`, which gives each socket its own
   copy under a one-shot owner. Without it the frame is built and never reaches the wire.
