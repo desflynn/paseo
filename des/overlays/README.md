@@ -237,6 +237,11 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
   and reports played there while Des listened on his phone. Several clients playing at once also
   sounded like an echo on the first install. The app already plays that frame and answers `audio_played`; the app
   needs no change.
+- A report plays as one clip: `TTSManager.generateAndWaitForPlayback(..., singleClip)` sends every
+  sentence as a chunk of one audio group (only the last chunk has `isLastChunk`), and the app
+  buffers the group and plays it once. Per-sentence clips let a car's Bluetooth drop to the
+  radio between sentences and clipped the first words of the next one. Voice mode keeps
+  per-sentence playback. The speak tool text also tells agents to send the whole report in one call.
 - A modern app socket drops any message nobody owns (`SessionDelivery.permits`), so the
   speaker sends through the new `SessionDelivery.broadcast`, which gives each socket its own
   copy under a one-shot owner. Without it the frame is built and never reaches the wire.
