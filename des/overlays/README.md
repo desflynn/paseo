@@ -229,9 +229,13 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
 - `speak` is always registered. Its text says to use it only when Des asks for a spoken report.
   An agent in chat mode keeps its voice-session handler; every other agent speaks through a
   daemon-owned speaker (`speech/daemon-speaker.ts`) that synthesises with the daemon's TTS and
-  sends `audio_output` with `isVoiceMode` false to one app session: the one that last sent a
-  non-ping request (`Session.lastInteractionAt`). Several clients playing at once sounded like an
-  echo on the first install. The app already plays that frame and answers `audio_played`; the app
+  sends `audio_output` with `isVoiceMode` false to one app session: the client where Des last
+  typed a prompt in the speaking agent's chat (`Session.lastUserPromptAt`; prompts with a
+  `sourceAgentId` are other agents and do not count). With no such prompt on any client it falls
+  back to the most recently active client (`Session.lastInteractionAt`, any non-ping request).
+  "Most recently active" alone failed: a Windows laptop's background requests kept it freshest
+  and reports played there while Des listened on his phone. Several clients playing at once also
+  sounded like an echo on the first install. The app already plays that frame and answers `audio_played`; the app
   needs no change.
 - A modern app socket drops any message nobody owns (`SessionDelivery.permits`), so the
   speaker sends through the new `SessionDelivery.broadcast`, which gives each socket its own
@@ -243,8 +247,9 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
   sessions do not count), no client confirmed within ten minutes. The 4000 character cap stays.
 - Daemon-side only, so it ships as an `app.asar` backend payload and needs no app rebuild.
 - Evidence: unit tests per touch point (mcp-server 3 speak cases, tts-manager, voice-session,
-  daemon-speaker 8, owned-subscriptions broadcast); live smoke on a branch daemon with a
+  daemon-speaker 9, owned-subscriptions broadcast); live smoke on a branch daemon with a
   throwaway home: a plain Claude seat, chat mode off, called `speak`, the daemon synthesised it,
-  an app-type client received the frame and confirmed, and the call returned. With three app
-  sessions connected, each report played only on the most recently active one. Des heard it on
-  the installed 0.12.0-df app (22 Oct); the echo was the reason for the single-client rule.
+  an app-type client received the frame and confirmed, and the call returned. With a busy
+  client firing background requests, each report still played only on the client that typed the
+  prompt (phone, then laptop). Des heard it on the installed 0.12.0-df app (22 Oct); his echo
+  and his phone-versus-laptop test drove the single-client and typed-prompt rules.

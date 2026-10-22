@@ -187,7 +187,7 @@ index ee6c74701..d9f7b4631 100644
  
    /**
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index 0c626eeb1..e17da6812 100644
+index 0c626eeb1..73974c145 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
 @@ -552,6 +552,7 @@ export interface SessionOptions {
@@ -198,18 +198,23 @@ index 0c626eeb1..e17da6812 100644
    };
    dictation?: {
      finalTimeoutMs?: number;
-@@ -702,6 +703,7 @@ export class Session {
+@@ -702,6 +703,8 @@ export class Session {
    private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
    private readonly clientId: string;
    private readonly clientType: SessionOptions["clientType"];
 +  private lastInteractionAtMs = 0;
++  private readonly userPromptAtByAgent = new Map<string, number>();
    private readonly authorization: SessionAuthorization;
    private appVersion: string | null;
    private clientCapabilities: ReadonlySet<ClientCapability>;
-@@ -1569,10 +1571,24 @@ export class Session {
+@@ -1569,10 +1572,28 @@ export class Session {
      };
    }
  
++  public lastUserPromptAt(agentId: string): number {
++    return this.userPromptAtByAgent.get(agentId) ?? 0;
++  }
++
 +  public lastInteractionAt(): number {
 +    return this.lastInteractionAtMs;
 +  }
@@ -231,7 +236,7 @@ index 0c626eeb1..e17da6812 100644
    /**
     * Send initial state to client after connection
     */
-@@ -2142,6 +2158,8 @@ export class Session {
+@@ -2142,6 +2163,8 @@ export class Session {
    }
  
    private async handleRequest(msg: SessionInboundMessage, source?: object): Promise<void> {
@@ -240,6 +245,15 @@ index 0c626eeb1..e17da6812 100644
      this.inflightRequests++;
      if (this.inflightRequests > this.peakInflightRequests) {
        this.peakInflightRequests = this.inflightRequests;
+@@ -8250,6 +8273,8 @@ export class Session {
+ 
+     try {
+       const agentId = resolved.agentId;
++      // Prompts from other agents are not Des typing; `speak` follows the client he typed on.
++      if (!msg.sourceAgentId) this.userPromptAtByAgent.set(agentId, Date.now());
+ 
+       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
+       this.sessionLogger.trace(
 diff --git a/packages/server/src/server/session/owned-subscriptions/index.test.ts b/packages/server/src/server/session/owned-subscriptions/index.test.ts
 index 8e8e33a4c..1193dca15 100644
 --- a/packages/server/src/server/session/owned-subscriptions/index.test.ts
@@ -418,10 +432,10 @@ index 95537dd02..5e997cd2d 100644
    /**
 diff --git a/packages/server/src/server/speech/daemon-speaker.test.ts b/packages/server/src/server/speech/daemon-speaker.test.ts
 new file mode 100644
-index 000000000..270634cc5
+index 000000000..7cd60e1d6
 --- /dev/null
 +++ b/packages/server/src/server/speech/daemon-speaker.test.ts
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,186 @@
 +import { Readable } from "node:stream";
 +import pino from "pino";
 +import { describe, expect, it, vi } from "vitest";
@@ -442,6 +456,7 @@ index 000000000..270634cc5
 +  const sessions = received.map((messages, index) => ({
 +    isAppClient: () => true,
 +    lastInteractionAt: () => 1000 + index,
++    lastUserPromptAt: (_agentId: string) => 0,
 +    sendToAllSources: (message: SessionOutboundMessage) => {
 +      messages.push(message);
 +    },
@@ -454,6 +469,7 @@ index 000000000..270634cc5
 +  sessions: Array<{
 +    isAppClient: () => boolean;
 +    lastInteractionAt: () => number;
++    lastUserPromptAt: (agentId: string) => number;
 +    sendToAllSources: (message: SessionOutboundMessage) => void;
 +  }>;
 +  playbackTimeoutMs?: number;
@@ -485,6 +501,22 @@ index 000000000..270634cc5
 +    expect(speaker.confirmAudioPlayed(message.payload.id)).toBe(true);
 +    await playback;
 +    expect(speaker.confirmAudioPlayed(message.payload.id)).toBe(true);
++  });
++
++  it("plays on the client where Des last typed a prompt in this agent's chat, not the busiest client", async () => {
++    const { received, sessions } = createClients(2);
++    // Client 1 is busier (newer interaction), but Des typed in this chat on client 0.
++    sessions[0].lastUserPromptAt = (agentId) => (agentId === "agent-1" ? 500 : 0);
++    sessions[1].lastUserPromptAt = (agentId) => (agentId === "agent-2" ? 900 : 0);
++    const speaker = createSpeaker({ sessions });
++
++    const playback = speaker.speak({ text: "Spoken report.", callerAgentId: "agent-1" });
++    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
++    expect(received[1]).toHaveLength(0);
++    const message = received[0][0];
++    if (message.type !== "audio_output") throw new Error("expected audio_output");
++    speaker.confirmAudioPlayed(message.payload.id);
++    await playback;
 +  });
 +
 +  it("keeps playing on the same client for a whole report, then re-picks for the next", async () => {
@@ -535,6 +567,7 @@ index 000000000..270634cc5
 +    const pluginSession = {
 +      isAppClient: () => false,
 +      lastInteractionAt: () => 9999,
++      lastUserPromptAt: () => 9999,
 +      sendToAllSources: (message: SessionOutboundMessage) => {
 +        plugin.push(message);
 +      },
@@ -591,10 +624,10 @@ index 000000000..270634cc5
 +});
 diff --git a/packages/server/src/server/speech/daemon-speaker.ts b/packages/server/src/server/speech/daemon-speaker.ts
 new file mode 100644
-index 000000000..e0fef605a
+index 000000000..24640a0ff
 --- /dev/null
 +++ b/packages/server/src/server/speech/daemon-speaker.ts
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,109 @@
 +import type pino from "pino";
 +
 +import { TTSManager } from "../agent/tts-manager.js";
@@ -610,6 +643,8 @@ index 000000000..e0fef605a
 +  isAppClient(): boolean;
 +  /** When the client last did something (not a heartbeat), in epoch milliseconds. */
 +  lastInteractionAt(): number;
++  /** When the user last typed a prompt to this agent on this client; 0 if never. */
++  lastUserPromptAt(agentId: string): number;
 +  sendToAllSources(message: SessionOutboundMessage): void;
 +}
 +
@@ -629,7 +664,23 @@ index 000000000..e0fef605a
 +}
 +
 +/**
-+ * Speaks for agents outside chat mode. Audio goes to the app client Des used last with
++ * The client where Des last typed a prompt in this agent's chat. Prompts from other agents
++ * do not count. With no such prompt on any client, the most recently active client.
++ */
++function pickPlayer(
++  sessions: DaemonSpeakerSession[],
++  agentId: string,
++): DaemonSpeakerSession | null {
++  let best: DaemonSpeakerSession | null = null;
++  for (const session of sessions) {
++    const promptAt = session.lastUserPromptAt(agentId);
++    if (promptAt > 0 && (!best || promptAt >= best.lastUserPromptAt(agentId))) best = session;
++  }
++  return best ?? mostRecentlyActive(sessions);
++}
++
++/**
++ * Speaks for agents outside chat mode. Audio goes to the app client where Des last typed in the agent\'s chat, with
 + * isVoiceMode false, which the app plays without a voice session. Clients answer with
 + * audio_played; the first answer per chunk resolves the call, later ones are ignored.
 + */
@@ -653,7 +704,7 @@ index 000000000..e0fef605a
 +    }
 +    logger.info({ agentId: callerAgentId, textLength: text.length }, "Daemon speak tool call");
 +
-+    // One client plays a whole report: the one Des used last. Every connected client
++    // One client plays a whole report: the one Des last typed in. Every connected client
 +    // playing it at once sounds like an echo.
 +    let player: DaemonSpeakerSession | null = null;
 +    const timeout = AbortSignal.timeout(playbackTimeoutMs);
@@ -662,10 +713,10 @@ index 000000000..e0fef605a
 +      text,
 +      (message) => {
 +        const sessions = listAppSessions();
-+        if (!player || !sessions.includes(player)) player = mostRecentlyActive(sessions);
++        if (!player || !sessions.includes(player)) player = pickPlayer(sessions, callerAgentId);
 +        logger.info(
 +          { agentId: callerAgentId, messageType: message.type, appClients: sessions.length },
-+          "Daemon speak sending audio to the most recently active app client",
++          "Daemon speak sending audio to the client of the last user prompt",
 +        );
 +        player?.sendToAllSources(message);
 +      },
