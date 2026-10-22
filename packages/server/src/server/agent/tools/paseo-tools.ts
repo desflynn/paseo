@@ -1273,7 +1273,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     {
       title: "Speak",
       description:
-        "Speak text to Des through the Paseo app. Use this ONLY when Des asks you specifically for a spoken report; never on your own choice. Blocks until playback completes.",
+        "Speak text to Des through the Paseo app. Use this ONLY when Des asks you specifically for a spoken report; never on your own choice. Send the whole report in ONE call, never one call per sentence or paragraph: Des may hear it over car Bluetooth, which drops out between calls. Blocks until playback completes.",
       inputSchema: {
         text: z
           .string()

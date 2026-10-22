@@ -6702,6 +6702,7 @@ describe("speak MCP tool", () => {
     const tool = lookupTool(server, "speak");
     expect(tool).toBeDefined();
     expect(tool.description).toContain("ONLY when Des asks you specifically");
+    expect(tool.description).toContain("whole report in ONE call");
 
     await tool.handler({ text: "Spoken report." });
     expect(speak).toHaveBeenCalledWith(
