@@ -119,10 +119,51 @@ index d2c406aa9..8dd728b32 100644
    if (options.voiceOnly) {
      return toCatalog();
 diff --git a/packages/server/src/server/agent/tts-manager.test.ts b/packages/server/src/server/agent/tts-manager.test.ts
-index 6dfc19830..a6e2aea16 100644
+index 6dfc19830..91cf75305 100644
 --- a/packages/server/src/server/agent/tts-manager.test.ts
 +++ b/packages/server/src/server/agent/tts-manager.test.ts
-@@ -295,4 +295,27 @@ describe("TTSManager", () => {
+@@ -52,6 +52,40 @@ describe("TTSManager", () => {
+     expect(audioMessage?.payload.isLastChunk).toBe(true);
+   });
+ 
++  it("sends a single-clip report as one chunk group, without waiting between sentences", async () => {
++    const manager = new TTSManager("s1", pino({ level: "silent" }), new FakeTts());
++    const abort = new AbortController();
++    const emitted: AudioOutputMessage[] = [];
++
++    const task = manager.generateAndWaitForPlayback(
++      "First sentence. Second sentence. Third sentence.",
++      (msg) => {
++        if (isAudioOutputMessage(msg)) emitted.push(msg);
++      },
++      abort.signal,
++      false,
++      true,
++    );
++
++    // Nothing confirms playback until every sentence has been sent.
++    await vi.waitFor(() => expect(emitted).toHaveLength(3));
++    expect(new Set(emitted.map((m) => m.payload.groupId)).size).toBe(1);
++    expect(emitted.map((m) => m.payload.chunkIndex)).toEqual([0, 1, 2]);
++    expect(emitted.map((m) => m.payload.isLastChunk)).toEqual([false, false, true]);
++
++    let settled = false;
++    const settledTask = task.finally(() => {
++      settled = true;
++    });
++    for (const msg of emitted.slice(0, 2)) manager.confirmAudioPlayed(msg.payload.id);
++    await new Promise((resolve) => setTimeout(resolve, 20));
++    expect(settled).toBe(false);
++
++    manager.confirmAudioPlayed(emitted[2].payload.id);
++    await settledTask;
++    expect(settled).toBe(true);
++  });
++
+   it("splits long text into safe synthesis segments", async () => {
+     const calls: string[] = [];
+     const tts: TextToSpeechProvider = {
+@@ -295,4 +329,27 @@ describe("TTSManager", () => {
  
      expect(warnSpy).not.toHaveBeenCalled();
    });
@@ -151,10 +192,175 @@ index 6dfc19830..a6e2aea16 100644
 +  });
  });
 diff --git a/packages/server/src/server/agent/tts-manager.ts b/packages/server/src/server/agent/tts-manager.ts
-index ee6c74701..d9f7b4631 100644
+index ee6c74701..cfe6dcf11 100644
 --- a/packages/server/src/server/agent/tts-manager.ts
 +++ b/packages/server/src/server/agent/tts-manager.ts
-@@ -446,8 +446,10 @@ export class TTSManager {
+@@ -22,6 +22,15 @@ type PreparedTtsSegment = TtsSegment & {
+   stream: Readable;
+ };
+ 
++interface PlaybackGroup {
++  audioId: string;
++  pending: PendingPlayback;
++  /** Settles when the client has confirmed every chunk, or the group was released. */
++  done: Promise<void>;
++  nextChunkIndex: number;
++  close(): void;
++}
++
+ type PreparedSegmentResult =
+   | { kind: "prepared"; prepared: PreparedTtsSegment }
+   | { kind: "aborted" }
+@@ -145,13 +154,18 @@ export class TTSManager {
+ 
+   /**
+    * Generate TTS audio, emit to client, and wait for playback confirmation
+-   * Returns a Promise that resolves when the client confirms playback completed
++   * Returns a Promise that resolves when the client confirms playback completed.
++   *
++   * By default each sentence is its own clip, sent once the previous one has played. With
++   * `singleClip` every sentence is sent as a chunk of one group as soon as it is synthesized,
++   * and the client plays the group as one clip, with no gap between sentences.
+    */
+   public async generateAndWaitForPlayback(
+     text: string,
+     emitMessage: (msg: SessionOutboundMessage) => void,
+     abortSignal: AbortSignal,
+     isVoiceMode: boolean,
++    singleClip = false,
+   ): Promise<void> {
+     const ttsStartMs = Date.now();
+     this.logger.info(
+@@ -189,6 +203,8 @@ export class TTSManager {
+ 
+     scheduleNextSegments();
+ 
++    const group = singleClip ? this.openPlaybackGroup(abortSignal) : null;
++
+     try {
+       for (const segment of segments) {
+         if (abortSignal.aborted) {
+@@ -220,6 +236,19 @@ export class TTSManager {
+           `TTS segment ${segment.index} synthesis ready (waited ${synthWaitMs}ms, total ${Date.now() - ttsStartMs}ms)`,
+         );
+ 
++        if (group) {
++          await this.emitGroupedSegment({
++            prepared: result.prepared,
++            group,
++            isLast: segment.index === segments.length - 1,
++            emitMessage,
++            abortSignal,
++            isVoiceMode,
++          });
++          scheduleNextSegments();
++          continue;
++        }
++
+         const emitStart = Date.now();
+         await this.emitPreparedSegment({
+           prepared: result.prepared,
+@@ -238,7 +267,12 @@ export class TTSManager {
+ 
+         scheduleNextSegments();
+       }
++
++      if (group) {
++        await this.finishPlaybackGroup(group);
++      }
+     } finally {
++      group?.close();
+       this.cleanupPrefetchedSegments(inflight);
+       this.logger.info(
+         { totalMs: Date.now() - ttsStartMs },
+@@ -342,6 +376,86 @@ export class TTSManager {
+     this.recentlyClosedAudioIds.set(audioId, now + CLOSED_AUDIO_ID_TTL_MS);
+   }
+ 
++  /** One playback shared by every chunk of a single-clip report. */
++  private openPlaybackGroup(abortSignal: AbortSignal): PlaybackGroup {
++    const audioId = uuidv4();
++    let resolveDone!: () => void;
++    const done = new Promise<void>((resolve) => {
++      resolveDone = resolve;
++    });
++    const pending: PendingPlayback = {
++      resolve: resolveDone,
++      reject: () => resolveDone(),
++      pendingChunks: 0,
++      streamEnded: false,
++    };
++    this.pendingPlaybacks.set(audioId, pending);
++
++    const release = () => {
++      if (this.pendingPlaybacks.delete(audioId)) {
++        this.rememberClosedAudioId(audioId);
++      }
++      resolveDone();
++    };
++    abortSignal.addEventListener("abort", release, { once: true });
++
++    return {
++      audioId,
++      pending,
++      done,
++      nextChunkIndex: 0,
++      close: () => {
++        abortSignal.removeEventListener("abort", release);
++        release();
++      },
++    };
++  }
++
++  private async emitGroupedSegment(params: {
++    prepared: PreparedTtsSegment;
++    group: PlaybackGroup;
++    isLast: boolean;
++    emitMessage: (msg: SessionOutboundMessage) => void;
++    abortSignal: AbortSignal;
++    isVoiceMode: boolean;
++  }): Promise<void> {
++    const { prepared, group, isLast, emitMessage, abortSignal, isVoiceMode } = params;
++    try {
++      const buffers: Buffer[] = [];
++      for await (const chunk of prepared.stream) {
++        if (abortSignal.aborted) return;
++        buffers.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
++      }
++      if (abortSignal.aborted || buffers.length === 0) return;
++
++      const chunkIndex = group.nextChunkIndex;
++      group.nextChunkIndex += 1;
++      group.pending.pendingChunks += 1;
++      emitMessage({
++        type: "audio_output",
++        payload: {
++          id: `${group.audioId}:${chunkIndex}`,
++          groupId: group.audioId,
++          chunkIndex,
++          isLastChunk: isLast,
++          audio: Buffer.concat(buffers).toString("base64"),
++          format: prepared.format,
++          isVoiceMode,
++        },
++      });
++    } finally {
++      this.destroySpeechStream(prepared.stream);
++    }
++  }
++
++  private async finishPlaybackGroup(group: PlaybackGroup): Promise<void> {
++    group.pending.streamEnded = true;
++    if (group.pending.pendingChunks === 0) {
++      group.close();
++    }
++    await group.done;
++  }
++
+   private async emitPreparedSegment(params: {
+     prepared: PreparedTtsSegment;
+     emitMessage: (msg: SessionOutboundMessage) => void;
+@@ -446,8 +560,10 @@ export class TTSManager {
    /**
     * Called when client confirms audio playback completed
     * Resolves the corresponding promise
@@ -166,7 +372,7 @@ index ee6c74701..d9f7b4631 100644
      const [audioId] = chunkId.includes(":") ? chunkId.split(":") : [chunkId];
      const pending = this.pendingPlaybacks.get(audioId);
  
-@@ -457,10 +459,9 @@ export class TTSManager {
+@@ -457,10 +573,9 @@ export class TTSManager {
        const expiresAt = this.recentlyClosedAudioIds.get(audioId);
        if (expiresAt && expiresAt > now) {
          this.logger.debug({ chunkId }, "Ignoring late confirmation for recently closed audio ID");
@@ -179,7 +385,7 @@ index ee6c74701..d9f7b4631 100644
      }
  
      pending.pendingChunks = Math.max(0, pending.pendingChunks - 1);
-@@ -470,6 +471,7 @@ export class TTSManager {
+@@ -470,6 +585,7 @@ export class TTSManager {
        this.pendingPlaybacks.delete(audioId);
        this.rememberClosedAudioId(audioId);
      }
@@ -433,10 +639,10 @@ index 95537dd02..5e997cd2d 100644
    /**
 diff --git a/packages/server/src/server/speech/daemon-speaker.test.ts b/packages/server/src/server/speech/daemon-speaker.test.ts
 new file mode 100644
-index 000000000..7cd60e1d6
+index 000000000..88f9ffe1e
 --- /dev/null
 +++ b/packages/server/src/server/speech/daemon-speaker.test.ts
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,192 @@
 +import { Readable } from "node:stream";
 +import pino from "pino";
 +import { describe, expect, it, vi } from "vitest";
@@ -533,11 +739,17 @@ index 000000000..7cd60e1d6
 +      text: "One sentence. Another sentence.",
 +      callerAgentId: "agent-1",
 +    });
-+    await vi.waitFor(() => expect(received[1]).toHaveLength(1));
++    // Every sentence arrives before playback starts, as one chunk group the app plays as a
++    // single clip, so there is no gap between sentences for a car's Bluetooth to drop in.
++    await vi.waitFor(() => expect(received[1]).toHaveLength(2));
++    const [one, another] = received[1];
++    if (one.type !== "audio_output" || another.type !== "audio_output") {
++      throw new Error("expected audio_output");
++    }
++    expect(one.payload.groupId).toBe(another.payload.groupId);
++    expect([one.payload.isLastChunk, another.payload.isLastChunk]).toEqual([false, true]);
 +    // The stale client becomes the active one mid-report; the report stays where it started.
 +    sessions[0].lastInteractionAt = () => 5000;
-+    confirmAll(1);
-+    await vi.waitFor(() => expect(received[1]).toHaveLength(2));
 +    confirmAll(1);
 +    await first;
 +    expect(received[0]).toHaveLength(0);
@@ -625,10 +837,10 @@ index 000000000..7cd60e1d6
 +});
 diff --git a/packages/server/src/server/speech/daemon-speaker.ts b/packages/server/src/server/speech/daemon-speaker.ts
 new file mode 100644
-index 000000000..24640a0ff
+index 000000000..9025f6e58
 --- /dev/null
 +++ b/packages/server/src/server/speech/daemon-speaker.ts
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,112 @@
 +import type pino from "pino";
 +
 +import { TTSManager } from "../agent/tts-manager.js";
@@ -723,6 +935,9 @@ index 000000000..24640a0ff
 +      },
 +      abortSignal,
 +      false,
++      // One clip for the whole report: a gap between sentence clips lets a car's Bluetooth
++      // drop to the radio and clips the first words of the next sentence.
++      true,
 +    );
 +    if (timeout.aborted && !signal?.aborted) {
 +      throw new Error("No app client confirmed playback");
