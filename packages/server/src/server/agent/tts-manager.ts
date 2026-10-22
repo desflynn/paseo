@@ -36,6 +36,20 @@ type PreparedSegmentResult =
   | { kind: "aborted" }
   | { kind: "error"; error: unknown };
 
+// A phone or car needs a moment to route audio to Bluetooth; without a lead-in it clips the
+// first words of a report.
+const LEAD_IN_SILENCE_SECONDS = 2;
+const DEFAULT_PCM_SAMPLE_RATE = 24000;
+
+/** Silence for the front of a PCM clip (16-bit mono); nothing for any other format. */
+function leadInSilence(format: string): Buffer {
+  const [kind, ...params] = format.split(";").map((part) => part.trim());
+  if (kind !== "pcm") return Buffer.alloc(0);
+  const rate = Number(params.find((part) => part.startsWith("rate="))?.slice("rate=".length));
+  const sampleRate = Number.isFinite(rate) && rate > 0 ? rate : DEFAULT_PCM_SAMPLE_RATE;
+  return Buffer.alloc(Math.round(sampleRate * LEAD_IN_SILENCE_SECONDS) * 2);
+}
+
 const MAX_TTS_SEGMENT_CHARS = 260;
 const TTS_PREFETCH_SEGMENTS = 2;
 const CLOSED_AUDIO_ID_TTL_MS = 10_000;
@@ -431,6 +445,9 @@ export class TTSManager {
       const chunkIndex = group.nextChunkIndex;
       group.nextChunkIndex += 1;
       group.pending.pendingChunks += 1;
+      if (chunkIndex === 0) {
+        buffers.unshift(leadInSilence(prepared.format));
+      }
       emitMessage({
         type: "audio_output",
         payload: {

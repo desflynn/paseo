@@ -86,6 +86,38 @@ describe("TTSManager", () => {
     expect(settled).toBe(true);
   });
 
+  it("starts a single-clip report with two seconds of silence, and only that report", async () => {
+    const manager = new TTSManager("s1", pino({ level: "silent" }), new FakeTts());
+    const abort = new AbortController();
+    const run = async (singleClip: boolean) => {
+      const emitted: AudioOutputMessage[] = [];
+      await manager.generateAndWaitForPlayback(
+        "First sentence. Second sentence.",
+        (msg) => {
+          if (isAudioOutputMessage(msg)) {
+            emitted.push(msg);
+            manager.confirmAudioPlayed(msg.payload.id);
+          }
+        },
+        abort.signal,
+        false,
+        singleClip,
+      );
+      return emitted.map((m) => Buffer.from(m.payload.audio, "base64"));
+    };
+
+    // 24 kHz, 16-bit mono: two seconds is 96000 bytes. FakeTts audio is "ab" per sentence.
+    const [first, second] = await run(true);
+    expect(first).toHaveLength(96000 + 2);
+    expect(first.subarray(0, 96000).every((byte) => byte === 0)).toBe(true);
+    expect(first.subarray(96000).toString()).toBe("ab");
+    expect(second.toString()).toBe("ab");
+
+    // A per-sentence clip (voice mode) is left as it was.
+    const [plain] = await run(false);
+    expect(plain.toString()).toBe("ab");
+  });
+
   it("splits long text into safe synthesis segments", async () => {
     const calls: string[] = [];
     const tts: TextToSpeechProvider = {
