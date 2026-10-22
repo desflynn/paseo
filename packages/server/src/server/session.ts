@@ -704,6 +704,7 @@ export class Session {
   private readonly clientId: string;
   private readonly clientType: SessionOptions["clientType"];
   private lastInteractionAtMs = 0;
+  private readonly userPromptAtByAgent = new Map<string, number>();
   private readonly authorization: SessionAuthorization;
   private appVersion: string | null;
   private clientCapabilities: ReadonlySet<ClientCapability>;
@@ -1569,6 +1570,10 @@ export class Session {
       inflightRequests: this.inflightRequests,
       peakInflightRequests: this.peakInflightRequests,
     };
+  }
+
+  public lastUserPromptAt(agentId: string): number {
+    return this.userPromptAtByAgent.get(agentId) ?? 0;
   }
 
   public lastInteractionAt(): number {
@@ -8268,6 +8273,8 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
+      // Prompts from other agents are not Des typing; `speak` follows the client he typed on.
+      if (!msg.sourceAgentId) this.userPromptAtByAgent.set(agentId, Date.now());
 
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       this.sessionLogger.trace(

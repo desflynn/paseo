@@ -13,6 +13,8 @@ interface DaemonSpeakerSession {
   isAppClient(): boolean;
   /** When the client last did something (not a heartbeat), in epoch milliseconds. */
   lastInteractionAt(): number;
+  /** When the user last typed a prompt to this agent on this client; 0 if never. */
+  lastUserPromptAt(agentId: string): number;
   sendToAllSources(message: SessionOutboundMessage): void;
 }
 
@@ -32,7 +34,23 @@ function mostRecentlyActive(sessions: DaemonSpeakerSession[]): DaemonSpeakerSess
 }
 
 /**
- * Speaks for agents outside chat mode. Audio goes to the app client Des used last with
+ * The client where Des last typed a prompt in this agent's chat. Prompts from other agents
+ * do not count. With no such prompt on any client, the most recently active client.
+ */
+function pickPlayer(
+  sessions: DaemonSpeakerSession[],
+  agentId: string,
+): DaemonSpeakerSession | null {
+  let best: DaemonSpeakerSession | null = null;
+  for (const session of sessions) {
+    const promptAt = session.lastUserPromptAt(agentId);
+    if (promptAt > 0 && (!best || promptAt >= best.lastUserPromptAt(agentId))) best = session;
+  }
+  return best ?? mostRecentlyActive(sessions);
+}
+
+/**
+ * Speaks for agents outside chat mode. Audio goes to the app client where Des last typed in the agent\'s chat, with
  * isVoiceMode false, which the app plays without a voice session. Clients answer with
  * audio_played; the first answer per chunk resolves the call, later ones are ignored.
  */
@@ -56,7 +74,7 @@ export function createDaemonSpeaker(options: {
     }
     logger.info({ agentId: callerAgentId, textLength: text.length }, "Daemon speak tool call");
 
-    // One client plays a whole report: the one Des used last. Every connected client
+    // One client plays a whole report: the one Des last typed in. Every connected client
     // playing it at once sounds like an echo.
     let player: DaemonSpeakerSession | null = null;
     const timeout = AbortSignal.timeout(playbackTimeoutMs);
@@ -65,10 +83,10 @@ export function createDaemonSpeaker(options: {
       text,
       (message) => {
         const sessions = listAppSessions();
-        if (!player || !sessions.includes(player)) player = mostRecentlyActive(sessions);
+        if (!player || !sessions.includes(player)) player = pickPlayer(sessions, callerAgentId);
         logger.info(
           { agentId: callerAgentId, messageType: message.type, appClients: sessions.length },
-          "Daemon speak sending audio to the most recently active app client",
+          "Daemon speak sending audio to the client of the last user prompt",
         );
         player?.sendToAllSources(message);
       },

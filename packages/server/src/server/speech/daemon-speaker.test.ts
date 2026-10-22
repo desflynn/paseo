@@ -18,6 +18,7 @@ function createClients(count: number) {
   const sessions = received.map((messages, index) => ({
     isAppClient: () => true,
     lastInteractionAt: () => 1000 + index,
+    lastUserPromptAt: (_agentId: string) => 0,
     sendToAllSources: (message: SessionOutboundMessage) => {
       messages.push(message);
     },
@@ -30,6 +31,7 @@ function createSpeaker(options: {
   sessions: Array<{
     isAppClient: () => boolean;
     lastInteractionAt: () => number;
+    lastUserPromptAt: (agentId: string) => number;
     sendToAllSources: (message: SessionOutboundMessage) => void;
   }>;
   playbackTimeoutMs?: number;
@@ -61,6 +63,22 @@ describe("createDaemonSpeaker", () => {
     expect(speaker.confirmAudioPlayed(message.payload.id)).toBe(true);
     await playback;
     expect(speaker.confirmAudioPlayed(message.payload.id)).toBe(true);
+  });
+
+  it("plays on the client where Des last typed a prompt in this agent's chat, not the busiest client", async () => {
+    const { received, sessions } = createClients(2);
+    // Client 1 is busier (newer interaction), but Des typed in this chat on client 0.
+    sessions[0].lastUserPromptAt = (agentId) => (agentId === "agent-1" ? 500 : 0);
+    sessions[1].lastUserPromptAt = (agentId) => (agentId === "agent-2" ? 900 : 0);
+    const speaker = createSpeaker({ sessions });
+
+    const playback = speaker.speak({ text: "Spoken report.", callerAgentId: "agent-1" });
+    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
+    expect(received[1]).toHaveLength(0);
+    const message = received[0][0];
+    if (message.type !== "audio_output") throw new Error("expected audio_output");
+    speaker.confirmAudioPlayed(message.payload.id);
+    await playback;
   });
 
   it("keeps playing on the same client for a whole report, then re-picks for the next", async () => {
@@ -111,6 +129,7 @@ describe("createDaemonSpeaker", () => {
     const pluginSession = {
       isAppClient: () => false,
       lastInteractionAt: () => 9999,
+      lastUserPromptAt: () => 9999,
       sendToAllSources: (message: SessionOutboundMessage) => {
         plugin.push(message);
       },
