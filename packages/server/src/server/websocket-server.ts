@@ -66,6 +66,7 @@ import {
 import type { ScriptHealthState } from "./script-health-monitor.js";
 import type { ServiceProxySubsystem } from "./service-proxy.js";
 import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
+import { createDaemonSpeaker, type DaemonSpeaker } from "./speech/daemon-speaker.js";
 import type { SpeechReadinessSnapshot, SpeechService } from "./speech/speech-runtime.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "./voice-types.js";
 import {
@@ -571,6 +572,7 @@ export class VoiceAssistantWebSocketServer {
   } | null;
   private readonly voiceSpeakHandlers = new Map<string, VoiceSpeakHandler>();
   private readonly voiceCallerContexts = new Map<string, VoiceCallerContext>();
+  private readonly daemonSpeaker: DaemonSpeaker;
   private readonly workspaceSetupSnapshots = new Map<string, WorkspaceSetupSnapshot>();
   private readonly workspaceSetupRuntime: WorkspaceSetupRuntime;
   private readonly providerSnapshotManager: ProviderSnapshotManager;
@@ -664,6 +666,11 @@ export class VoiceAssistantWebSocketServer {
     workspaceLabelService?: WorkspaceLabelService,
   ) {
     this.logger = logger.child({ module: "websocket-server" });
+    this.daemonSpeaker = createDaemonSpeaker({
+      logger: this.logger,
+      resolveTts: () => this.speech?.resolveTts() ?? null,
+      listSessions: () => this.listSessions(),
+    });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
     this.advertiseDaemonStatusRpc = wsConfig.daemonStatusRpc !== false;
     this.advertiseRelayConfig = wsConfig.relayConfig !== false;
@@ -1543,6 +1550,7 @@ export class VoiceAssistantWebSocketServer {
         unregisterVoiceCallerContext: (agentId) => {
           this.voiceCallerContexts.delete(agentId);
         },
+        confirmDaemonAudioPlayed: (chunkId) => this.daemonSpeaker.confirmAudioPlayed(chunkId),
       },
       dictation:
         this.dictation || this.speech
@@ -2027,8 +2035,9 @@ export class VoiceAssistantWebSocketServer {
     });
   }
 
-  public resolveVoiceSpeakHandler(callerAgentId: string): VoiceSpeakHandler | null {
-    return this.voiceSpeakHandlers.get(callerAgentId) ?? null;
+  /** A voice session's own handler wins; every other agent speaks through the daemon. */
+  public resolveVoiceSpeakHandler(callerAgentId: string): VoiceSpeakHandler {
+    return this.voiceSpeakHandlers.get(callerAgentId) ?? this.daemonSpeaker.speak;
   }
 
   public resolveVoiceCallerContext(callerAgentId: string): VoiceCallerContext | null {

@@ -6688,17 +6688,25 @@ describe("speak MCP tool", () => {
     );
   });
 
-  it("does not register speak tool unless voice tools are enabled", async () => {
+  it("registers speak for an agent with no voice tools, told to use it only when asked", async () => {
     const { agentManager, agentStorage } = createTestDeps();
+    const speak = vi.fn().mockResolvedValue(undefined);
     const server = await createAgentMcpServer({
       agentManager,
       agentStorage,
       providerSnapshotManager: createOpenCodeManager().manager,
       callerAgentId: "agent-no-voice",
+      resolveSpeakHandler: () => speak,
       logger,
     });
     const tool = lookupTool(server, "speak");
-    expect(tool).toBeUndefined();
+    expect(tool).toBeDefined();
+    expect(tool.description).toContain("ONLY when Des asks you specifically");
+
+    await tool.handler({ text: "Spoken report." });
+    expect(speak).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Spoken report.", callerAgentId: "agent-no-voice" }),
+    );
   });
 });
 

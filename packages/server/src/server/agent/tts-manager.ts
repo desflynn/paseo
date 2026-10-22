@@ -446,8 +446,10 @@ export class TTSManager {
   /**
    * Called when client confirms audio playback completed
    * Resolves the corresponding promise
+   * Returns false when the id belongs to no playback of this manager, so a caller
+   * can hand it to another manager.
    */
-  public confirmAudioPlayed(chunkId: string): void {
+  public confirmAudioPlayed(chunkId: string): boolean {
     const [audioId] = chunkId.includes(":") ? chunkId.split(":") : [chunkId];
     const pending = this.pendingPlaybacks.get(audioId);
 
@@ -457,10 +459,9 @@ export class TTSManager {
       const expiresAt = this.recentlyClosedAudioIds.get(audioId);
       if (expiresAt && expiresAt > now) {
         this.logger.debug({ chunkId }, "Ignoring late confirmation for recently closed audio ID");
-        return;
+        return true;
       }
-      this.logger.warn({ chunkId }, "Received confirmation for unknown audio ID");
-      return;
+      return false;
     }
 
     pending.pendingChunks = Math.max(0, pending.pendingChunks - 1);
@@ -470,6 +471,7 @@ export class TTSManager {
       this.pendingPlaybacks.delete(audioId);
       this.rememberClosedAudioId(audioId);
     }
+    return true;
   }
 
   /**

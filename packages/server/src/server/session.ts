@@ -552,6 +552,7 @@ export interface SessionOptions {
     unregisterVoiceSpeakHandler?: (agentId: string) => void;
     registerVoiceCallerContext?: (agentId: string, context: VoiceCallerContext) => void;
     unregisterVoiceCallerContext?: (agentId: string) => void;
+    confirmDaemonAudioPlayed?: (chunkId: string) => boolean;
   };
   dictation?: {
     finalTimeoutMs?: number;

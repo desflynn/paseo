@@ -147,6 +147,7 @@ export interface VoiceSessionOptions {
     unregisterVoiceSpeakHandler?: (agentId: string) => void;
     registerVoiceCallerContext?: (agentId: string, context: VoiceCallerContext) => void;
     unregisterVoiceCallerContext?: (agentId: string) => void;
+    confirmDaemonAudioPlayed?: (chunkId: string) => boolean;
   };
   dictation?: {
     finalTimeoutMs?: number;
@@ -205,6 +206,7 @@ export class VoiceSession {
     context: VoiceCallerContext,
   ) => void;
   private readonly unregisterVoiceCallerContext?: (agentId: string) => void;
+  private readonly confirmDaemonAudioPlayed?: (chunkId: string) => boolean;
   private readonly getSpeechReadiness?: () => SpeechReadinessSnapshot;
 
   private voiceModeAgentId: string | null = null;
@@ -225,6 +227,7 @@ export class VoiceSession {
     this.unregisterVoiceSpeakHandler = voiceBridge?.unregisterVoiceSpeakHandler;
     this.registerVoiceCallerContext = voiceBridge?.registerVoiceCallerContext;
     this.unregisterVoiceCallerContext = voiceBridge?.unregisterVoiceCallerContext;
+    this.confirmDaemonAudioPlayed = voiceBridge?.confirmDaemonAudioPlayed;
     this.getSpeechReadiness = dictation?.getSpeechReadiness;
 
     this.ttsManager = new TTSManager(this.sessionId, this.sessionLogger, tts);
@@ -1140,7 +1143,9 @@ export class VoiceSession {
    * Handle audio playback confirmation from client
    */
   handleAudioPlayed(id: string): void {
-    this.ttsManager.confirmAudioPlayed(id);
+    if (this.ttsManager.confirmAudioPlayed(id)) return;
+    if (this.confirmDaemonAudioPlayed?.(id)) return;
+    this.sessionLogger.warn({ chunkId: id }, "Received confirmation for unknown audio ID");
   }
 
   /**

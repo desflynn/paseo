@@ -295,4 +295,27 @@ describe("TTSManager", () => {
 
     expect(warnSpy).not.toHaveBeenCalled();
   });
+
+  it("reports whether a confirmation matched an audio id it owns", async () => {
+    const manager = new TTSManager("s1", pino({ level: "silent" }), new FakeTts());
+    const abort = new AbortController();
+    let pendingId = "";
+    let knownWhilePending: boolean | null = null;
+
+    await manager.generateAndWaitForPlayback(
+      "hello",
+      (msg) => {
+        if (msg.type === "audio_output") {
+          pendingId = msg.payload.id;
+          knownWhilePending = manager.confirmAudioPlayed(msg.payload.id);
+        }
+      },
+      abort.signal,
+      true,
+    );
+
+    expect(knownWhilePending).toBe(true);
+    expect(manager.confirmAudioPlayed(pendingId)).toBe(true);
+    expect(manager.confirmAudioPlayed("someone-elses-audio:0")).toBe(false);
+  });
 });
