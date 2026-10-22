@@ -52,6 +52,40 @@ describe("TTSManager", () => {
     expect(audioMessage?.payload.isLastChunk).toBe(true);
   });
 
+  it("sends a single-clip report as one chunk group, without waiting between sentences", async () => {
+    const manager = new TTSManager("s1", pino({ level: "silent" }), new FakeTts());
+    const abort = new AbortController();
+    const emitted: AudioOutputMessage[] = [];
+
+    const task = manager.generateAndWaitForPlayback(
+      "First sentence. Second sentence. Third sentence.",
+      (msg) => {
+        if (isAudioOutputMessage(msg)) emitted.push(msg);
+      },
+      abort.signal,
+      false,
+      true,
+    );
+
+    // Nothing confirms playback until every sentence has been sent.
+    await vi.waitFor(() => expect(emitted).toHaveLength(3));
+    expect(new Set(emitted.map((m) => m.payload.groupId)).size).toBe(1);
+    expect(emitted.map((m) => m.payload.chunkIndex)).toEqual([0, 1, 2]);
+    expect(emitted.map((m) => m.payload.isLastChunk)).toEqual([false, false, true]);
+
+    let settled = false;
+    const settledTask = task.finally(() => {
+      settled = true;
+    });
+    for (const msg of emitted.slice(0, 2)) manager.confirmAudioPlayed(msg.payload.id);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+
+    manager.confirmAudioPlayed(emitted[2].payload.id);
+    await settledTask;
+    expect(settled).toBe(true);
+  });
+
   it("splits long text into safe synthesis segments", async () => {
     const calls: string[] = [];
     const tts: TextToSpeechProvider = {

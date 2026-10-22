@@ -92,6 +92,9 @@ export function createDaemonSpeaker(options: {
       },
       abortSignal,
       false,
+      // One clip for the whole report: a gap between sentence clips lets a car's Bluetooth
+      // drop to the radio and clips the first words of the next sentence.
+      true,
     );
     if (timeout.aborted && !signal?.aborted) {
       throw new Error("No app client confirmed playback");

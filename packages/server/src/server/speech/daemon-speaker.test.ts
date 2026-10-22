@@ -94,11 +94,17 @@ describe("createDaemonSpeaker", () => {
       text: "One sentence. Another sentence.",
       callerAgentId: "agent-1",
     });
-    await vi.waitFor(() => expect(received[1]).toHaveLength(1));
+    // Every sentence arrives before playback starts, as one chunk group the app plays as a
+    // single clip, so there is no gap between sentences for a car's Bluetooth to drop in.
+    await vi.waitFor(() => expect(received[1]).toHaveLength(2));
+    const [one, another] = received[1];
+    if (one.type !== "audio_output" || another.type !== "audio_output") {
+      throw new Error("expected audio_output");
+    }
+    expect(one.payload.groupId).toBe(another.payload.groupId);
+    expect([one.payload.isLastChunk, another.payload.isLastChunk]).toEqual([false, true]);
     // The stale client becomes the active one mid-report; the report stays where it started.
     sessions[0].lastInteractionAt = () => 5000;
-    confirmAll(1);
-    await vi.waitFor(() => expect(received[1]).toHaveLength(2));
     confirmAll(1);
     await first;
     expect(received[0]).toHaveLength(0);
