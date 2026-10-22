@@ -11,6 +11,8 @@ const DEFAULT_PLAYBACK_TIMEOUT_MS = 10 * 60 * 1000;
 interface DaemonSpeakerSession {
   /** Mobile and browser/desktop app sessions play audio; plugin, CLI and MCP sessions do not. */
   isAppClient(): boolean;
+  /** When the client last did something (not a heartbeat), in epoch milliseconds. */
+  lastInteractionAt(): number;
   sendToAllSources(message: SessionOutboundMessage): void;
 }
 
@@ -21,8 +23,16 @@ export interface DaemonSpeaker {
   confirmAudioPlayed(chunkId: string): boolean;
 }
 
+function mostRecentlyActive(sessions: DaemonSpeakerSession[]): DaemonSpeakerSession | null {
+  let best: DaemonSpeakerSession | null = null;
+  for (const session of sessions) {
+    if (!best || session.lastInteractionAt() >= best.lastInteractionAt()) best = session;
+  }
+  return best;
+}
+
 /**
- * Speaks for agents outside chat mode. Audio goes to every connected app client with
+ * Speaks for agents outside chat mode. Audio goes to the app client Des used last with
  * isVoiceMode false, which the app plays without a voice session. Clients answer with
  * audio_played; the first answer per chunk resolves the call, later ones are ignored.
  */
@@ -46,19 +56,21 @@ export function createDaemonSpeaker(options: {
     }
     logger.info({ agentId: callerAgentId, textLength: text.length }, "Daemon speak tool call");
 
+    // One client plays a whole report: the one Des used last. Every connected client
+    // playing it at once sounds like an echo.
+    let player: DaemonSpeakerSession | null = null;
     const timeout = AbortSignal.timeout(playbackTimeoutMs);
     const abortSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
     await ttsManager.generateAndWaitForPlayback(
       text,
       (message) => {
         const sessions = listAppSessions();
+        if (!player || !sessions.includes(player)) player = mostRecentlyActive(sessions);
         logger.info(
           { agentId: callerAgentId, messageType: message.type, appClients: sessions.length },
-          "Daemon speak sending audio to app clients",
+          "Daemon speak sending audio to the most recently active app client",
         );
-        for (const session of sessions) {
-          session.sendToAllSources(message);
-        }
+        player?.sendToAllSources(message);
       },
       abortSignal,
       false,

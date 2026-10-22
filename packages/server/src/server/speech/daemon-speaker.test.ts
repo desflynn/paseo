@@ -12,10 +12,12 @@ const tts: TextToSpeechProvider = {
   },
 };
 
+// Later clients were active more recently: client 0 is the stalest.
 function createClients(count: number) {
   const received: SessionOutboundMessage[][] = Array.from({ length: count }, () => []);
-  const sessions = received.map((messages) => ({
+  const sessions = received.map((messages, index) => ({
     isAppClient: () => true,
+    lastInteractionAt: () => 1000 + index,
     sendToAllSources: (message: SessionOutboundMessage) => {
       messages.push(message);
     },
@@ -27,6 +29,7 @@ function createSpeaker(options: {
   tts?: TextToSpeechProvider | null;
   sessions: Array<{
     isAppClient: () => boolean;
+    lastInteractionAt: () => number;
     sendToAllSources: (message: SessionOutboundMessage) => void;
   }>;
   playbackTimeoutMs?: number;
@@ -40,26 +43,52 @@ function createSpeaker(options: {
 }
 
 describe("createDaemonSpeaker", () => {
-  it("broadcasts audio to every client as non-voice-mode and resolves on the first confirmation", async () => {
+  it("plays on the most recently active app client only and resolves on its confirmation", async () => {
     const { received, sessions } = createClients(2);
     const speaker = createSpeaker({ sessions });
 
     const playback = speaker.speak({ text: "Spoken report.", callerAgentId: "agent-1" });
-    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
+    await vi.waitFor(() => expect(received[1]).toHaveLength(1));
 
-    for (const messages of received) {
-      expect(messages[0]).toMatchObject({
-        type: "audio_output",
-        payload: { isVoiceMode: false, isLastChunk: true },
-      });
-    }
-    const message = received[0][0];
+    expect(received[1][0]).toMatchObject({
+      type: "audio_output",
+      payload: { isVoiceMode: false, isLastChunk: true },
+    });
+    expect(received[0]).toHaveLength(0);
+    const message = received[1][0];
     if (message.type !== "audio_output") throw new Error("expected audio_output");
 
-    // The phone confirms first; the desktop confirms late and is ignored.
     expect(speaker.confirmAudioPlayed(message.payload.id)).toBe(true);
     await playback;
     expect(speaker.confirmAudioPlayed(message.payload.id)).toBe(true);
+  });
+
+  it("keeps playing on the same client for a whole report, then re-picks for the next", async () => {
+    const { received, sessions } = createClients(2);
+    const speaker = createSpeaker({ sessions });
+    const confirmAll = (index: number) => {
+      for (const message of received[index]) {
+        if (message.type === "audio_output") speaker.confirmAudioPlayed(message.payload.id);
+      }
+    };
+
+    const first = speaker.speak({
+      text: "One sentence. Another sentence.",
+      callerAgentId: "agent-1",
+    });
+    await vi.waitFor(() => expect(received[1]).toHaveLength(1));
+    // The stale client becomes the active one mid-report; the report stays where it started.
+    sessions[0].lastInteractionAt = () => 5000;
+    confirmAll(1);
+    await vi.waitFor(() => expect(received[1]).toHaveLength(2));
+    confirmAll(1);
+    await first;
+    expect(received[0]).toHaveLength(0);
+
+    const second = speaker.speak({ text: "Next report.", callerAgentId: "agent-1" });
+    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
+    confirmAll(0);
+    await second;
   });
 
   it("does not claim a confirmation for audio it did not send", () => {
@@ -81,6 +110,7 @@ describe("createDaemonSpeaker", () => {
     const plugin: SessionOutboundMessage[] = [];
     const pluginSession = {
       isAppClient: () => false,
+      lastInteractionAt: () => 9999,
       sendToAllSources: (message: SessionOutboundMessage) => {
         plugin.push(message);
       },

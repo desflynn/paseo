@@ -703,6 +703,7 @@ export class Session {
   private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
   private readonly clientId: string;
   private readonly clientType: SessionOptions["clientType"];
+  private lastInteractionAtMs = 0;
   private readonly authorization: SessionAuthorization;
   private appVersion: string | null;
   private clientCapabilities: ReadonlySet<ClientCapability>;
@@ -1570,6 +1571,10 @@ export class Session {
     };
   }
 
+  public lastInteractionAt(): number {
+    return this.lastInteractionAtMs;
+  }
+
   public isAppClient(): boolean {
     return this.clientType === "mobile" || this.clientType === "browser";
   }
@@ -2153,6 +2158,8 @@ export class Session {
   }
 
   private async handleRequest(msg: SessionInboundMessage, source?: object): Promise<void> {
+    // Heartbeats come from idle background clients too; only real requests show where Des is.
+    if (msg.type !== "ping") this.lastInteractionAtMs = Date.now();
     this.inflightRequests++;
     if (this.inflightRequests > this.peakInflightRequests) {
       this.peakInflightRequests = this.inflightRequests;
