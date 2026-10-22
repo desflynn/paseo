@@ -187,7 +187,7 @@ index ee6c74701..d9f7b4631 100644
  
    /**
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index 0c626eeb1..0fd5a5dfb 100644
+index 0c626eeb1..e17da6812 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
 @@ -552,6 +552,7 @@ export interface SessionOptions {
@@ -198,10 +198,22 @@ index 0c626eeb1..0fd5a5dfb 100644
    };
    dictation?: {
      finalTimeoutMs?: number;
-@@ -1569,10 +1570,20 @@ export class Session {
+@@ -702,6 +703,7 @@ export class Session {
+   private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
+   private readonly clientId: string;
+   private readonly clientType: SessionOptions["clientType"];
++  private lastInteractionAtMs = 0;
+   private readonly authorization: SessionAuthorization;
+   private appVersion: string | null;
+   private clientCapabilities: ReadonlySet<ClientCapability>;
+@@ -1569,10 +1571,24 @@ export class Session {
      };
    }
  
++  public lastInteractionAt(): number {
++    return this.lastInteractionAtMs;
++  }
++
 +  public isAppClient(): boolean {
 +    return this.clientType === "mobile" || this.clientType === "browser";
 +  }
@@ -219,6 +231,15 @@ index 0c626eeb1..0fd5a5dfb 100644
    /**
     * Send initial state to client after connection
     */
+@@ -2142,6 +2158,8 @@ export class Session {
+   }
+ 
+   private async handleRequest(msg: SessionInboundMessage, source?: object): Promise<void> {
++    // Heartbeats come from idle background clients too; only real requests show where Des is.
++    if (msg.type !== "ping") this.lastInteractionAtMs = Date.now();
+     this.inflightRequests++;
+     if (this.inflightRequests > this.peakInflightRequests) {
+       this.peakInflightRequests = this.inflightRequests;
 diff --git a/packages/server/src/server/session/owned-subscriptions/index.test.ts b/packages/server/src/server/session/owned-subscriptions/index.test.ts
 index 8e8e33a4c..1193dca15 100644
 --- a/packages/server/src/server/session/owned-subscriptions/index.test.ts
@@ -397,10 +418,10 @@ index 95537dd02..5e997cd2d 100644
    /**
 diff --git a/packages/server/src/server/speech/daemon-speaker.test.ts b/packages/server/src/server/speech/daemon-speaker.test.ts
 new file mode 100644
-index 000000000..e0942a763
+index 000000000..270634cc5
 --- /dev/null
 +++ b/packages/server/src/server/speech/daemon-speaker.test.ts
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,167 @@
 +import { Readable } from "node:stream";
 +import pino from "pino";
 +import { describe, expect, it, vi } from "vitest";
@@ -415,10 +436,12 @@ index 000000000..e0942a763
 +  },
 +};
 +
++// Later clients were active more recently: client 0 is the stalest.
 +function createClients(count: number) {
 +  const received: SessionOutboundMessage[][] = Array.from({ length: count }, () => []);
-+  const sessions = received.map((messages) => ({
++  const sessions = received.map((messages, index) => ({
 +    isAppClient: () => true,
++    lastInteractionAt: () => 1000 + index,
 +    sendToAllSources: (message: SessionOutboundMessage) => {
 +      messages.push(message);
 +    },
@@ -430,6 +453,7 @@ index 000000000..e0942a763
 +  tts?: TextToSpeechProvider | null;
 +  sessions: Array<{
 +    isAppClient: () => boolean;
++    lastInteractionAt: () => number;
 +    sendToAllSources: (message: SessionOutboundMessage) => void;
 +  }>;
 +  playbackTimeoutMs?: number;
@@ -443,26 +467,52 @@ index 000000000..e0942a763
 +}
 +
 +describe("createDaemonSpeaker", () => {
-+  it("broadcasts audio to every client as non-voice-mode and resolves on the first confirmation", async () => {
++  it("plays on the most recently active app client only and resolves on its confirmation", async () => {
 +    const { received, sessions } = createClients(2);
 +    const speaker = createSpeaker({ sessions });
 +
 +    const playback = speaker.speak({ text: "Spoken report.", callerAgentId: "agent-1" });
-+    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
++    await vi.waitFor(() => expect(received[1]).toHaveLength(1));
 +
-+    for (const messages of received) {
-+      expect(messages[0]).toMatchObject({
-+        type: "audio_output",
-+        payload: { isVoiceMode: false, isLastChunk: true },
-+      });
-+    }
-+    const message = received[0][0];
++    expect(received[1][0]).toMatchObject({
++      type: "audio_output",
++      payload: { isVoiceMode: false, isLastChunk: true },
++    });
++    expect(received[0]).toHaveLength(0);
++    const message = received[1][0];
 +    if (message.type !== "audio_output") throw new Error("expected audio_output");
 +
-+    // The phone confirms first; the desktop confirms late and is ignored.
 +    expect(speaker.confirmAudioPlayed(message.payload.id)).toBe(true);
 +    await playback;
 +    expect(speaker.confirmAudioPlayed(message.payload.id)).toBe(true);
++  });
++
++  it("keeps playing on the same client for a whole report, then re-picks for the next", async () => {
++    const { received, sessions } = createClients(2);
++    const speaker = createSpeaker({ sessions });
++    const confirmAll = (index: number) => {
++      for (const message of received[index]) {
++        if (message.type === "audio_output") speaker.confirmAudioPlayed(message.payload.id);
++      }
++    };
++
++    const first = speaker.speak({
++      text: "One sentence. Another sentence.",
++      callerAgentId: "agent-1",
++    });
++    await vi.waitFor(() => expect(received[1]).toHaveLength(1));
++    // The stale client becomes the active one mid-report; the report stays where it started.
++    sessions[0].lastInteractionAt = () => 5000;
++    confirmAll(1);
++    await vi.waitFor(() => expect(received[1]).toHaveLength(2));
++    confirmAll(1);
++    await first;
++    expect(received[0]).toHaveLength(0);
++
++    const second = speaker.speak({ text: "Next report.", callerAgentId: "agent-1" });
++    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
++    confirmAll(0);
++    await second;
 +  });
 +
 +  it("does not claim a confirmation for audio it did not send", () => {
@@ -484,6 +534,7 @@ index 000000000..e0942a763
 +    const plugin: SessionOutboundMessage[] = [];
 +    const pluginSession = {
 +      isAppClient: () => false,
++      lastInteractionAt: () => 9999,
 +      sendToAllSources: (message: SessionOutboundMessage) => {
 +        plugin.push(message);
 +      },
@@ -540,10 +591,10 @@ index 000000000..e0942a763
 +});
 diff --git a/packages/server/src/server/speech/daemon-speaker.ts b/packages/server/src/server/speech/daemon-speaker.ts
 new file mode 100644
-index 000000000..66c79df9c
+index 000000000..e0fef605a
 --- /dev/null
 +++ b/packages/server/src/server/speech/daemon-speaker.ts
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,91 @@
 +import type pino from "pino";
 +
 +import { TTSManager } from "../agent/tts-manager.js";
@@ -557,6 +608,8 @@ index 000000000..66c79df9c
 +interface DaemonSpeakerSession {
 +  /** Mobile and browser/desktop app sessions play audio; plugin, CLI and MCP sessions do not. */
 +  isAppClient(): boolean;
++  /** When the client last did something (not a heartbeat), in epoch milliseconds. */
++  lastInteractionAt(): number;
 +  sendToAllSources(message: SessionOutboundMessage): void;
 +}
 +
@@ -567,8 +620,16 @@ index 000000000..66c79df9c
 +  confirmAudioPlayed(chunkId: string): boolean;
 +}
 +
++function mostRecentlyActive(sessions: DaemonSpeakerSession[]): DaemonSpeakerSession | null {
++  let best: DaemonSpeakerSession | null = null;
++  for (const session of sessions) {
++    if (!best || session.lastInteractionAt() >= best.lastInteractionAt()) best = session;
++  }
++  return best;
++}
++
 +/**
-+ * Speaks for agents outside chat mode. Audio goes to every connected app client with
++ * Speaks for agents outside chat mode. Audio goes to the app client Des used last with
 + * isVoiceMode false, which the app plays without a voice session. Clients answer with
 + * audio_played; the first answer per chunk resolves the call, later ones are ignored.
 + */
@@ -592,19 +653,21 @@ index 000000000..66c79df9c
 +    }
 +    logger.info({ agentId: callerAgentId, textLength: text.length }, "Daemon speak tool call");
 +
++    // One client plays a whole report: the one Des used last. Every connected client
++    // playing it at once sounds like an echo.
++    let player: DaemonSpeakerSession | null = null;
 +    const timeout = AbortSignal.timeout(playbackTimeoutMs);
 +    const abortSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 +    await ttsManager.generateAndWaitForPlayback(
 +      text,
 +      (message) => {
 +        const sessions = listAppSessions();
++        if (!player || !sessions.includes(player)) player = mostRecentlyActive(sessions);
 +        logger.info(
 +          { agentId: callerAgentId, messageType: message.type, appClients: sessions.length },
-+          "Daemon speak sending audio to app clients",
++          "Daemon speak sending audio to the most recently active app client",
 +        );
-+        for (const session of sessions) {
-+          session.sendToAllSources(message);
-+        }
++        player?.sendToAllSources(message);
 +      },
 +      abortSignal,
 +      false,

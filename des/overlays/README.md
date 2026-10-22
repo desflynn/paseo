@@ -229,8 +229,10 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
 - `speak` is always registered. Its text says to use it only when Des asks for a spoken report.
   An agent in chat mode keeps its voice-session handler; every other agent speaks through a
   daemon-owned speaker (`speech/daemon-speaker.ts`) that synthesises with the daemon's TTS and
-  sends `audio_output` with `isVoiceMode` false to every connected app session. The app already
-  plays that frame and answers `audio_played`; the app needs no change.
+  sends `audio_output` with `isVoiceMode` false to one app session: the one that last sent a
+  non-ping request (`Session.lastInteractionAt`). Several clients playing at once sounded like an
+  echo on the first install. The app already plays that frame and answers `audio_played`; the app
+  needs no change.
 - A modern app socket drops any message nobody owns (`SessionDelivery.permits`), so the
   speaker sends through the new `SessionDelivery.broadcast`, which gives each socket its own
   copy under a one-shot owner. Without it the frame is built and never reaches the wire.
@@ -241,7 +243,8 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
   sessions do not count), no client confirmed within ten minutes. The 4000 character cap stays.
 - Daemon-side only, so it ships as an `app.asar` backend payload and needs no app rebuild.
 - Evidence: unit tests per touch point (mcp-server 3 speak cases, tts-manager, voice-session,
-  daemon-speaker 7, owned-subscriptions broadcast); live smoke on a branch daemon with a
+  daemon-speaker 8, owned-subscriptions broadcast); live smoke on a branch daemon with a
   throwaway home: a plain Claude seat, chat mode off, called `speak`, the daemon synthesised it,
-  an app-type client received the frame and confirmed, and the call returned. Not proven: audio
-  coming out of the real app speaker; that is Des's check on the 0.12 build.
+  an app-type client received the frame and confirmed, and the call returned. With three app
+  sessions connected, each report played only on the most recently active one. Des heard it on
+  the installed 0.12.0-df app (22 Oct); the echo was the reason for the single-client rule.
