@@ -1,8 +1,8 @@
 diff --git a/packages/server/src/server/agent/mcp-server.test.ts b/packages/server/src/server/agent/mcp-server.test.ts
-index 6e093a18a..4ca6686dd 100644
+index 6e093a18a..f38019223 100644
 --- a/packages/server/src/server/agent/mcp-server.test.ts
 +++ b/packages/server/src/server/agent/mcp-server.test.ts
-@@ -6688,17 +6688,25 @@ describe("speak MCP tool", () => {
+@@ -6688,17 +6688,26 @@ describe("speak MCP tool", () => {
      );
    });
  
@@ -22,6 +22,7 @@ index 6e093a18a..4ca6686dd 100644
 -    expect(tool).toBeUndefined();
 +    expect(tool).toBeDefined();
 +    expect(tool.description).toContain("ONLY when Des asks you specifically");
++    expect(tool.description).toContain("whole report in ONE call");
 +
 +    await tool.handler({ text: "Spoken report." });
 +    expect(speak).toHaveBeenCalledWith(
@@ -31,7 +32,7 @@ index 6e093a18a..4ca6686dd 100644
  });
  
 diff --git a/packages/server/src/server/agent/tools/paseo-tools.ts b/packages/server/src/server/agent/tools/paseo-tools.ts
-index d2c406aa9..d3780656c 100644
+index d2c406aa9..8dd728b32 100644
 --- a/packages/server/src/server/agent/tools/paseo-tools.ts
 +++ b/packages/server/src/server/agent/tools/paseo-tools.ts
 @@ -1268,46 +1268,44 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
@@ -60,7 +61,7 @@ index d2c406aa9..d3780656c 100644
 +    {
 +      title: "Speak",
 +      description:
-+        "Speak text to Des through the Paseo app. Use this ONLY when Des asks you specifically for a spoken report; never on your own choice. Blocks until playback completes.",
++        "Speak text to Des through the Paseo app. Use this ONLY when Des asks you specifically for a spoken report; never on your own choice. Send the whole report in ONE call, never one call per sentence or paragraph: Des may hear it over car Bluetooth, which drops out between calls. Blocks until playback completes.",
 +      inputSchema: {
 +        text: z
 +          .string()
