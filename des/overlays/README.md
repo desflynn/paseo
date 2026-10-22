@@ -12,7 +12,8 @@ Before switching the existing checkout, commit or classify every project-owned c
 new branch with the preserved plugin, overlay and harness assets so daemon-served paths remain
 available. Use the following patch order on `v0.12.0`; overlay 2 remains superseded.
 The ten-patch stack reproduces 31 carried files byte-for-byte on this base; see
-`REPLAY-PROOF-0.12.0.txt`. The order changed in 0.12: it is now the order of the
+`REPLAY-PROOF-0.12.0.txt`. Overlay 12 (speak in every agent session) was added after that proof
+and applies on top of the ten. The order changed in 0.12: it is now the order of the
 `0.12.0-df` commits, and each patch applies with plain `git apply` in that order.
 
 ```bash
@@ -26,6 +27,7 @@ git apply des/overlays/reload-wait.patch
 git apply des/overlays/pi-compaction-status.patch
 git apply des/overlays/claude-stale-subagent.patch
 git apply des/overlays/claude-auto-compact-window.patch
+git apply des/overlays/speak-all-sessions.patch
 npm install                 # approve exact resolved install-script versions, see overlay 1
 npm run build:desktop        # from the repo root; installation is a separate owner action
 ```
@@ -55,6 +57,7 @@ clean; the nine touched test files pass (764 tests).
 | pi-compaction-status       | kept                  | Only `pi/agent.test.ts` needed rework.                                                                                                                                                       |
 | claude-stale-subagent      | kept, nothing trimmed | Upstream #6660, #6242 and #7266 cover other bugs; `completeRunningForegroundTasks` and the legacy sidechain gate are still absent upstream.                                                  |
 | claude-auto-compact-window | kept, trimmed         | Precedence unchanged. 0.12 keys usage by the active model, so the override applies on the active-model entry; the 0.11 max-over-all-models scan stays only as a fallback.                    |
+| speak-all-sessions         | new in 0.12           | Added 22 Oct 2026 after the carry proof; applies after the ten. Live smoke on a branch daemon, see overlay 12.                                                                               |
 | acp-context-meter          | retired               | Upstream ships its own fix (`acp-agent.ts` `handleUsageUpdate`). The old patch file is kept for history and is not applied.                                                                  |
 
 ## 1. Unsigned macOS build (the big one)
@@ -216,3 +219,29 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
 - Seed first-stream usage from SDK init and keep helper model usage from inflating the primary
   configured window. Token accounting and the percentage trigger override stay unchanged.
 - Evidence: `../claude-auto-compact-window/WORKING-LOG.md`; 101 focused cases GREEN.
+
+## 12. Speak in every agent session
+
+- Patch: `speak-all-sessions.patch`; apply last, after the Claude auto-compact overlay.
+- Goal: any agent gives Des a spoken report through Paseo's own `speak` tool, with chat mode
+  off. Asked for by Des on 22 Oct 2026 through DCI Head Guy; spec in
+  `/Users/des/dev/dci-harness/planning/paseo-speak-all-sessions.md`.
+- `speak` is always registered. Its text says to use it only when Des asks for a spoken report.
+  An agent in chat mode keeps its voice-session handler; every other agent speaks through a
+  daemon-owned speaker (`speech/daemon-speaker.ts`) that synthesises with the daemon's TTS and
+  sends `audio_output` with `isVoiceMode` false to every connected app session. The app already
+  plays that frame and answers `audio_played`; the app needs no change.
+- A modern app socket drops any message nobody owns (`SessionDelivery.permits`), so the
+  speaker sends through the new `SessionDelivery.broadcast`, which gives each socket its own
+  copy under a one-shot owner. Without it the frame is built and never reaches the wire.
+- `audio_played` ids a voice session does not know go to the daemon speaker
+  (`voiceBridge.confirmDaemonAudioPlayed`); `TTSManager.confirmAudioPlayed` now returns whether
+  it knew the id. The first confirmation per chunk resolves the call; later ones are ignored.
+- Failures the agent can read: TTS not configured, no app client connected (plugin, CLI and MCP
+  sessions do not count), no client confirmed within ten minutes. The 4000 character cap stays.
+- Daemon-side only, so it ships as an `app.asar` backend payload and needs no app rebuild.
+- Evidence: unit tests per touch point (mcp-server 3 speak cases, tts-manager, voice-session,
+  daemon-speaker 7, owned-subscriptions broadcast); live smoke on a branch daemon with a
+  throwaway home: a plain Claude seat, chat mode off, called `speak`, the daemon synthesised it,
+  an app-type client received the frame and confirmed, and the call returned. Not proven: audio
+  coming out of the real app speaker; that is Des's check on the 0.12 build.
