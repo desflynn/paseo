@@ -261,7 +261,16 @@ interface PiMcpServerConfig {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  // Built-in MCP: seconds. pi-mcp-adapter: requestTimeoutMs, in milliseconds.
+  timeout?: number;
+  requestTimeoutMs?: number;
 }
+
+// `speak` blocks until playback ends, and the daemon caps playback at 10 minutes. Pi's MCP client
+// gives up after 60 s by default, so a long report timed out on the agent while it was still playing.
+// The cap is just above the daemon's, and applies to the injected Paseo entry only.
+const PASEO_MCP_SERVER_NAME = "paseo";
+const PASEO_MCP_TIMEOUT_SECONDS = 660;
 
 // Pi's built-in MCP extension takes servers from Paseo's extension; pi-mcp-adapter replaces it
 // and takes them from a --mcp-config file.
@@ -540,7 +549,10 @@ function toPiBuiltinMcpServers(
         `Pi's built-in MCP cannot register SSE server "${name}": use streamable HTTP or load pi-mcp-adapter.`,
       );
     }
-    piServers[name] = toPiMcpConfig(config);
+    piServers[name] = {
+      ...toPiMcpConfig(config),
+      ...(name === PASEO_MCP_SERVER_NAME ? { timeout: PASEO_MCP_TIMEOUT_SECONDS } : {}),
+    };
   }
   return piServers;
 }
@@ -597,7 +609,12 @@ function createPiMcpConfigFile(
   }
   const mcpServers: Record<string, unknown> = { ...configuredServers };
   for (const [name, serverConfig] of Object.entries(servers)) {
-    mcpServers[name] = toPiMcpAdapterConfig(serverConfig);
+    mcpServers[name] = {
+      ...toPiMcpAdapterConfig(serverConfig),
+      ...(name === PASEO_MCP_SERVER_NAME
+        ? { requestTimeoutMs: PASEO_MCP_TIMEOUT_SECONDS * 1000 }
+        : {}),
+    };
   }
 
   const dir = mkdtempSync(join(tmpdir(), "paseo-pi-mcp-"));

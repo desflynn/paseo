@@ -28,6 +28,7 @@ git apply des/overlays/pi-compaction-status.patch
 git apply des/overlays/claude-stale-subagent.patch
 git apply des/overlays/claude-auto-compact-window.patch
 git apply des/overlays/speak-all-sessions.patch
+git apply des/overlays/pi-paseo-mcp-timeout.patch
 npm install                 # approve exact resolved install-script versions, see overlay 1
 npm run build:desktop        # from the repo root; installation is a separate owner action
 ```
@@ -261,3 +262,18 @@ Last verified: regenerated after MINE on `v0.11.0`; combined owner/agent/schedul
   client firing background requests, each report still played only on the client that typed the
   prompt (phone, then laptop). Des heard it on the installed 0.12.0-df app (22 Oct); his echo
   and his phone-versus-laptop test drove the single-client and typed-prompt rules.
+
+## 13. Pi: long timeout on the Paseo MCP entry
+
+- Patch: `pi-paseo-mcp-timeout.patch`. Applies after overlay 12.
+- `speak` blocks until playback ends, and the daemon caps playback at 10 minutes. Pi's MCP client
+  gives up on a tool call after 60 s by default, so a report over about 600 characters made the
+  agent see "Request timed out" (-32001) while it was still playing, and agents re-sent it.
+- The Paseo-injected `paseo` entry now carries a 660 s timeout on both Pi paths: `timeout` (seconds)
+  for the built-in MCP and `requestTimeoutMs` (milliseconds) in the pi-mcp-adapter temp config.
+  Other servers keep Pi's default. A config-only fix in `~/.pi/agent/mcp.json` does not work,
+  because the injected entry replaces a same-named global one.
+- Daemon-side only, so it ships in the `app.asar` backend payload. A running Pi agent keeps its
+  old MCP config until it restarts or reloads.
+- Evidence: three `pi/agent.test.ts` cases failed first (builtin, resumed session, adapter file)
+  and pass now; the file is 134/134. Live proof is a Pi seat speaking a report longer than 60 s.
