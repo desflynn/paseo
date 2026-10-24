@@ -553,6 +553,112 @@ describe("ClaudeAgentSession sub-agent sidechain updates", () => {
     ).toMatchObject({ type: "upsert", id: "task-tail-1", status: "failed" });
   });
 
+  test("derives no provider subagent row from a non-subagent parent tool", async () => {
+    // Frames naming an MCP parent tool are not a child of anything. Deriving a row from them
+    // materializes a nameless "Claude subagent" stuck "running" that nothing will ever finish —
+    // the row that pins a whole workspace "running".
+    queryFactory.mockImplementation(() =>
+      buildQueryMock([
+        {
+          type: "system",
+          subtype: "init",
+          session_id: "mcp-parent-session",
+          permissionMode: "default",
+          model: "opus",
+        },
+        {
+          type: "stream_event",
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: {
+              type: "tool_use",
+              id: "toolu_mcp_wait_1",
+              name: "mcp__dci__paseo_wait_for_agent",
+              input: { agentId: "f6460537" },
+            },
+          },
+        },
+        {
+          type: "assistant",
+          parent_tool_use_id: "toolu_mcp_wait_1",
+          message: { content: [{ type: "text", text: "waiting on the child" }] },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 0,
+            output_tokens: 1,
+          },
+          total_cost_usd: 0,
+        },
+      ]),
+    );
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    }).createSession({ provider: "claude", cwd: process.cwd() });
+
+    const events = await collectUntilTerminal(streamSession(session, "wait on the agent"));
+    await session.close();
+
+    expect(events.filter((event) => event.type === "provider_subagent")).toEqual([]);
+  });
+
+  test("terminalizes a running Task subagent when the parent turn succeeds", async () => {
+    // The turn ended in success, so no foreground child of it can still be working. Claude's own
+    // notification may never arrive — without this the row stays "running" forever.
+    queryFactory.mockImplementation(() =>
+      buildQueryMock([
+        {
+          type: "system",
+          subtype: "init",
+          session_id: "success-terminal-session",
+          permissionMode: "default",
+          model: "opus",
+        },
+        {
+          type: "system",
+          subtype: "task_started",
+          task_id: "success-task-1",
+          tool_use_id: "task-success-1",
+          task_type: "local_agent",
+          subagent_type: "Explore",
+          description: "Foreground child of a successful turn",
+        },
+        {
+          type: "result",
+          subtype: "success",
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 0,
+            output_tokens: 1,
+          },
+          total_cost_usd: 0,
+        },
+      ]),
+    );
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    }).createSession({ provider: "claude", cwd: process.cwd() });
+
+    const events = await collectUntilTerminal(streamSession(session, "delegate work"));
+    await session.close();
+
+    expect(
+      events
+        .filter((event) => event.type === "provider_subagent")
+        .map((event) => event.event)
+        .at(-1),
+    ).toMatchObject({ type: "upsert", id: "task-success-1", status: "completed" });
+  });
+
   test("tails sub-agent actions instead of dropping latest entries at cap", async () => {
     queryFactory.mockImplementation(() => buildQueryMock(buildTailScenarioEvents(205)));
 
