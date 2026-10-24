@@ -3524,6 +3524,8 @@ describe("PiRpcAgentClient", () => {
           url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
           auth: false,
           oauth: false,
+          // speak blocks until playback ends; the adapter's 60 s default timed long reports out.
+          requestTimeoutMs: 660_000,
         },
         localSecret: {
           command: "node",
@@ -3588,6 +3590,8 @@ describe("PiRpcAgentClient", () => {
       paseo: {
         url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
         headers: { Authorization: "Bearer token" },
+        // speak blocks until playback ends; Pi's 60 s default timed long reports out.
+        timeout: 660,
       },
       local: { command: "node", args: ["server.js"], env: { KEY: "`${x}`" } },
     });
@@ -3616,7 +3620,7 @@ describe("PiRpcAgentClient", () => {
     expect(actualLaunch.session).toBe(persistence.nativeHandle);
     expect(actualLaunch.argv).not.toContain("--mcp-config");
     expect(await readRegisteredMcpServers(actualLaunch.extensionPaths[0]!)).toEqual({
-      paseo: { url: "http://127.0.0.1:7777/mcp/agents?callerAgentId=agent-2" },
+      paseo: { url: "http://127.0.0.1:7777/mcp/agents?callerAgentId=agent-2", timeout: 660 },
     });
   });
 
