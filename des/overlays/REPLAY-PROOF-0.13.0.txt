@@ -1,0 +1,59 @@
+REPLAY PROOF — 0.13.0-df overlays onto vanilla v0.13.0
+Generated: 2026-10-24 10:31 IST
+
+Base:   v0.13.0 tag d34d17a90 ('chore(release): cut 0.13.0')
+Target: code tip 83c95c885 on branch 0.13.0-df (the docs commit that adds des/overlays
+        carries no source change, so every carried file matches this tip)
+Tree:   fresh detached worktree at /tmp/paseo-v013-final, zero dirty files before the run
+
+Applied in this order with plain 'git apply', no 3-way, no offsets:
+   1. unsigned-macos-build.patch        43 lines
+   2. pi-compaction-hold.patch         177 lines
+   3. pi-worktree-trust.patch          411 lines
+   4. pi-mcp-labels.patch              495 lines
+   5. reload-wait.patch                317 lines
+   6. pi-compaction-status.patch       203 lines
+   7. claude-stale-subagent.patch      310 lines
+   8. claude-auto-compact-window.patch   782 lines
+   9. speak-all-sessions.patch        1193 lines
+  10. pi-paseo-mcp-timeout.patch        79 lines
+
+Result: all 10 applied. 36 files touched, and every one is byte-identical (sha256) to the same file on 0.13.0-df.
+
+Files carried:
+   M package.json
+   M packages/app/e2e/browser/tool-call-overview-sheet.spec.ts
+   M packages/desktop/electron-builder.yml
+   M packages/protocol/src/tool-call-display.test.ts
+   M packages/protocol/src/tool-call-display.ts
+   M packages/server/src/server/agent/agent-manager.test.ts
+   M packages/server/src/server/agent/agent-manager.ts
+   M packages/server/src/server/agent/mcp-server.test.ts
+   M packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts
+   M packages/server/src/server/agent/providers/claude/agent.subagent-interrupt.test.ts
+   M packages/server/src/server/agent/providers/claude/agent.test.ts
+   M packages/server/src/server/agent/providers/claude/agent.ts
+   M packages/server/src/server/agent/providers/claude/subagents/live-source.test.ts
+   M packages/server/src/server/agent/providers/claude/subagents/live-source.ts
+   M packages/server/src/server/agent/providers/pi/agent.test.ts
+   M packages/server/src/server/agent/providers/pi/agent.ts
+   M packages/server/src/server/agent/providers/pi/cli-runtime.test.ts
+   M packages/server/src/server/agent/providers/pi/cli-runtime.ts
+   M packages/server/src/server/agent/providers/pi/extensions/contract.ts
+   M packages/server/src/server/agent/providers/pi/extensions/pi-mcp-adapter/index.test.ts
+   M packages/server/src/server/agent/providers/pi/extensions/pi-mcp-adapter/index.ts
+   M packages/server/src/server/agent/providers/pi/history-mapper.test.ts
+   M packages/server/src/server/agent/providers/pi/history-mapper.ts
+   M packages/server/src/server/agent/tools/paseo-tools.ts
+   M packages/server/src/server/agent/tts-manager.test.ts
+   M packages/server/src/server/agent/tts-manager.ts
+   M packages/server/src/server/session.test.ts
+   M packages/server/src/server/session.ts
+   M packages/server/src/server/session/owned-subscriptions/index.test.ts
+   M packages/server/src/server/session/owned-subscriptions/index.ts
+   M packages/server/src/server/session/voice/voice-session.test.ts
+   M packages/server/src/server/session/voice/voice-session.ts
+   M packages/server/src/server/websocket-server.ts
+  ?? packages/server/src/server/agent/providers/pi/pi-project-trust.ts
+  ?? packages/server/src/server/speech/daemon-speaker.test.ts
+  ?? packages/server/src/server/speech/daemon-speaker.ts

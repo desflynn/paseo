@@ -1,0 +1,1193 @@
+diff --git a/packages/server/src/server/agent/mcp-server.test.ts b/packages/server/src/server/agent/mcp-server.test.ts
+index b8a0d820e..dd53b7e76 100644
+--- a/packages/server/src/server/agent/mcp-server.test.ts
++++ b/packages/server/src/server/agent/mcp-server.test.ts
+@@ -6066,17 +6066,26 @@ describe("speak MCP tool", () => {
+     );
+   });
+ 
+-  it("does not register speak tool unless voice tools are enabled", async () => {
++  it("registers speak for an agent with no voice tools, told to use it only when asked", async () => {
+     const { agentManager, agentStorage } = createTestDeps();
++    const speak = vi.fn().mockResolvedValue(undefined);
+     const server = await createAgentMcpServer({
+       agentManager,
+       agentStorage,
+       providerSnapshotManager: createOpenCodeManager().manager,
+       callerAgentId: "agent-no-voice",
++      resolveSpeakHandler: () => speak,
+       logger,
+     });
+     const tool = lookupTool(server, "speak");
+-    expect(tool).toBeUndefined();
++    expect(tool).toBeDefined();
++    expect(tool.description).toContain("ONLY when Des asks you specifically");
++    expect(tool.description).toContain("whole report in ONE call");
++
++    await tool.handler({ text: "Spoken report." });
++    expect(speak).toHaveBeenCalledWith(
++      expect.objectContaining({ text: "Spoken report.", callerAgentId: "agent-no-voice" }),
++    );
+   });
+ });
+ 
+diff --git a/packages/server/src/server/agent/tools/paseo-tools.ts b/packages/server/src/server/agent/tools/paseo-tools.ts
+index 6b84f1716..3cb8a6dc6 100644
+--- a/packages/server/src/server/agent/tools/paseo-tools.ts
++++ b/packages/server/src/server/agent/tools/paseo-tools.ts
+@@ -1307,46 +1307,44 @@ function createToolCatalog(
+   type TopLevelCreateAgentArgs = z.infer<typeof canonicalTopLevelCreateAgentArgsSchema>;
+   type LegacyTopLevelCreateAgentArgs = z.infer<typeof legacyTopLevelCreateAgentArgsSchema>;
+ 
+-  if (options.voiceOnly || options.enableVoiceTools || callerContext?.enableVoiceTools) {
+-    registerTool(
+-      "speak",
+-      {
+-        title: "Speak",
+-        description:
+-          "Speak text to the user via daemon-managed voice output. Blocks until playback completes.",
+-        inputSchema: {
+-          text: z
+-            .string()
+-            .trim()
+-            .min(1, "text is required")
+-            .max(4000, "text must be 4000 characters or fewer"),
+-        },
+-        outputSchema: {
+-          ok: z.boolean(),
+-        },
++  registerTool(
++    "speak",
++    {
++      title: "Speak",
++      description:
++        "Speak text to Des through the Paseo app. Use this ONLY when Des asks you specifically for a spoken report; never on your own choice. Send the whole report in ONE call, never one call per sentence or paragraph: Des may hear it over car Bluetooth, which drops out between calls. Blocks until playback completes.",
++      inputSchema: {
++        text: z
++          .string()
++          .trim()
++          .min(1, "text is required")
++          .max(4000, "text must be 4000 characters or fewer"),
+       },
+-      async (args, context) => {
+-        if (!callerAgentId) {
+-          throw new PaseoToolInputError("speak is only available to agent-scoped tool sessions");
+-        }
+-        const handler = resolveSpeakHandler?.(callerAgentId) ?? null;
+-        if (!handler) {
+-          throw new PaseoToolInputError(
+-            `No speak handler registered for your session '${callerAgentId}'`,
+-          );
+-        }
+-        await handler({
+-          text: args.text,
+-          callerAgentId,
+-          signal: context?.signal,
+-        });
+-        return {
+-          content: [],
+-          structuredContent: ensureValidJson({ ok: true }),
+-        };
++      outputSchema: {
++        ok: z.boolean(),
+       },
+-    );
+-  }
++    },
++    async (args, context) => {
++      if (!callerAgentId) {
++        throw new PaseoToolInputError("speak is only available to agent-scoped tool sessions");
++      }
++      const handler = resolveSpeakHandler?.(callerAgentId) ?? null;
++      if (!handler) {
++        throw new PaseoToolInputError(
++          `No speak handler registered for your session '${callerAgentId}'`,
++        );
++      }
++      await handler({
++        text: args.text,
++        callerAgentId,
++        signal: context?.signal,
++      });
++      return {
++        content: [],
++        structuredContent: ensureValidJson({ ok: true }),
++      };
++    },
++  );
+ 
+   if (options.voiceOnly) {
+     return toCatalog();
+diff --git a/packages/server/src/server/agent/tts-manager.test.ts b/packages/server/src/server/agent/tts-manager.test.ts
+index 6dfc19830..9609b5753 100644
+--- a/packages/server/src/server/agent/tts-manager.test.ts
++++ b/packages/server/src/server/agent/tts-manager.test.ts
+@@ -52,6 +52,72 @@ describe("TTSManager", () => {
+     expect(audioMessage?.payload.isLastChunk).toBe(true);
+   });
+ 
++  it("sends a single-clip report as one chunk group, without waiting between sentences", async () => {
++    const manager = new TTSManager("s1", pino({ level: "silent" }), new FakeTts());
++    const abort = new AbortController();
++    const emitted: AudioOutputMessage[] = [];
++
++    const task = manager.generateAndWaitForPlayback(
++      "First sentence. Second sentence. Third sentence.",
++      (msg) => {
++        if (isAudioOutputMessage(msg)) emitted.push(msg);
++      },
++      abort.signal,
++      false,
++      true,
++    );
++
++    // Nothing confirms playback until every sentence has been sent.
++    await vi.waitFor(() => expect(emitted).toHaveLength(3));
++    expect(new Set(emitted.map((m) => m.payload.groupId)).size).toBe(1);
++    expect(emitted.map((m) => m.payload.chunkIndex)).toEqual([0, 1, 2]);
++    expect(emitted.map((m) => m.payload.isLastChunk)).toEqual([false, false, true]);
++
++    let settled = false;
++    const settledTask = task.finally(() => {
++      settled = true;
++    });
++    for (const msg of emitted.slice(0, 2)) manager.confirmAudioPlayed(msg.payload.id);
++    await new Promise((resolve) => setTimeout(resolve, 20));
++    expect(settled).toBe(false);
++
++    manager.confirmAudioPlayed(emitted[2].payload.id);
++    await settledTask;
++    expect(settled).toBe(true);
++  });
++
++  it("starts a single-clip report with two seconds of silence, and only that report", async () => {
++    const manager = new TTSManager("s1", pino({ level: "silent" }), new FakeTts());
++    const abort = new AbortController();
++    const run = async (singleClip: boolean) => {
++      const emitted: AudioOutputMessage[] = [];
++      await manager.generateAndWaitForPlayback(
++        "First sentence. Second sentence.",
++        (msg) => {
++          if (isAudioOutputMessage(msg)) {
++            emitted.push(msg);
++            manager.confirmAudioPlayed(msg.payload.id);
++          }
++        },
++        abort.signal,
++        false,
++        singleClip,
++      );
++      return emitted.map((m) => Buffer.from(m.payload.audio, "base64"));
++    };
++
++    // 24 kHz, 16-bit mono: two seconds is 96000 bytes. FakeTts audio is "ab" per sentence.
++    const [first, second] = await run(true);
++    expect(first).toHaveLength(96000 + 2);
++    expect(first.subarray(0, 96000).every((byte) => byte === 0)).toBe(true);
++    expect(first.subarray(96000).toString()).toBe("ab");
++    expect(second.toString()).toBe("ab");
++
++    // A per-sentence clip (voice mode) is left as it was.
++    const [plain] = await run(false);
++    expect(plain.toString()).toBe("ab");
++  });
++
+   it("splits long text into safe synthesis segments", async () => {
+     const calls: string[] = [];
+     const tts: TextToSpeechProvider = {
+@@ -295,4 +361,27 @@ describe("TTSManager", () => {
+ 
+     expect(warnSpy).not.toHaveBeenCalled();
+   });
++
++  it("reports whether a confirmation matched an audio id it owns", async () => {
++    const manager = new TTSManager("s1", pino({ level: "silent" }), new FakeTts());
++    const abort = new AbortController();
++    let pendingId = "";
++    let knownWhilePending: boolean | null = null;
++
++    await manager.generateAndWaitForPlayback(
++      "hello",
++      (msg) => {
++        if (msg.type === "audio_output") {
++          pendingId = msg.payload.id;
++          knownWhilePending = manager.confirmAudioPlayed(msg.payload.id);
++        }
++      },
++      abort.signal,
++      true,
++    );
++
++    expect(knownWhilePending).toBe(true);
++    expect(manager.confirmAudioPlayed(pendingId)).toBe(true);
++    expect(manager.confirmAudioPlayed("someone-elses-audio:0")).toBe(false);
++  });
+ });
+diff --git a/packages/server/src/server/agent/tts-manager.ts b/packages/server/src/server/agent/tts-manager.ts
+index ee6c74701..4b5a45b4a 100644
+--- a/packages/server/src/server/agent/tts-manager.ts
++++ b/packages/server/src/server/agent/tts-manager.ts
+@@ -22,11 +22,34 @@ type PreparedTtsSegment = TtsSegment & {
+   stream: Readable;
+ };
+ 
++interface PlaybackGroup {
++  audioId: string;
++  pending: PendingPlayback;
++  /** Settles when the client has confirmed every chunk, or the group was released. */
++  done: Promise<void>;
++  nextChunkIndex: number;
++  close(): void;
++}
++
+ type PreparedSegmentResult =
+   | { kind: "prepared"; prepared: PreparedTtsSegment }
+   | { kind: "aborted" }
+   | { kind: "error"; error: unknown };
+ 
++// A phone or car needs a moment to route audio to Bluetooth; without a lead-in it clips the
++// first words of a report.
++const LEAD_IN_SILENCE_SECONDS = 2;
++const DEFAULT_PCM_SAMPLE_RATE = 24000;
++
++/** Silence for the front of a PCM clip (16-bit mono); nothing for any other format. */
++function leadInSilence(format: string): Buffer {
++  const [kind, ...params] = format.split(";").map((part) => part.trim());
++  if (kind !== "pcm") return Buffer.alloc(0);
++  const rate = Number(params.find((part) => part.startsWith("rate="))?.slice("rate=".length));
++  const sampleRate = Number.isFinite(rate) && rate > 0 ? rate : DEFAULT_PCM_SAMPLE_RATE;
++  return Buffer.alloc(Math.round(sampleRate * LEAD_IN_SILENCE_SECONDS) * 2);
++}
++
+ const MAX_TTS_SEGMENT_CHARS = 260;
+ const TTS_PREFETCH_SEGMENTS = 2;
+ const CLOSED_AUDIO_ID_TTL_MS = 10_000;
+@@ -145,13 +168,18 @@ export class TTSManager {
+ 
+   /**
+    * Generate TTS audio, emit to client, and wait for playback confirmation
+-   * Returns a Promise that resolves when the client confirms playback completed
++   * Returns a Promise that resolves when the client confirms playback completed.
++   *
++   * By default each sentence is its own clip, sent once the previous one has played. With
++   * `singleClip` every sentence is sent as a chunk of one group as soon as it is synthesized,
++   * and the client plays the group as one clip, with no gap between sentences.
+    */
+   public async generateAndWaitForPlayback(
+     text: string,
+     emitMessage: (msg: SessionOutboundMessage) => void,
+     abortSignal: AbortSignal,
+     isVoiceMode: boolean,
++    singleClip = false,
+   ): Promise<void> {
+     const ttsStartMs = Date.now();
+     this.logger.info(
+@@ -189,6 +217,8 @@ export class TTSManager {
+ 
+     scheduleNextSegments();
+ 
++    const group = singleClip ? this.openPlaybackGroup(abortSignal) : null;
++
+     try {
+       for (const segment of segments) {
+         if (abortSignal.aborted) {
+@@ -220,6 +250,19 @@ export class TTSManager {
+           `TTS segment ${segment.index} synthesis ready (waited ${synthWaitMs}ms, total ${Date.now() - ttsStartMs}ms)`,
+         );
+ 
++        if (group) {
++          await this.emitGroupedSegment({
++            prepared: result.prepared,
++            group,
++            isLast: segment.index === segments.length - 1,
++            emitMessage,
++            abortSignal,
++            isVoiceMode,
++          });
++          scheduleNextSegments();
++          continue;
++        }
++
+         const emitStart = Date.now();
+         await this.emitPreparedSegment({
+           prepared: result.prepared,
+@@ -238,7 +281,12 @@ export class TTSManager {
+ 
+         scheduleNextSegments();
+       }
++
++      if (group) {
++        await this.finishPlaybackGroup(group);
++      }
+     } finally {
++      group?.close();
+       this.cleanupPrefetchedSegments(inflight);
+       this.logger.info(
+         { totalMs: Date.now() - ttsStartMs },
+@@ -342,6 +390,89 @@ export class TTSManager {
+     this.recentlyClosedAudioIds.set(audioId, now + CLOSED_AUDIO_ID_TTL_MS);
+   }
+ 
++  /** One playback shared by every chunk of a single-clip report. */
++  private openPlaybackGroup(abortSignal: AbortSignal): PlaybackGroup {
++    const audioId = uuidv4();
++    let resolveDone!: () => void;
++    const done = new Promise<void>((resolve) => {
++      resolveDone = resolve;
++    });
++    const pending: PendingPlayback = {
++      resolve: resolveDone,
++      reject: () => resolveDone(),
++      pendingChunks: 0,
++      streamEnded: false,
++    };
++    this.pendingPlaybacks.set(audioId, pending);
++
++    const release = () => {
++      if (this.pendingPlaybacks.delete(audioId)) {
++        this.rememberClosedAudioId(audioId);
++      }
++      resolveDone();
++    };
++    abortSignal.addEventListener("abort", release, { once: true });
++
++    return {
++      audioId,
++      pending,
++      done,
++      nextChunkIndex: 0,
++      close: () => {
++        abortSignal.removeEventListener("abort", release);
++        release();
++      },
++    };
++  }
++
++  private async emitGroupedSegment(params: {
++    prepared: PreparedTtsSegment;
++    group: PlaybackGroup;
++    isLast: boolean;
++    emitMessage: (msg: SessionOutboundMessage) => void;
++    abortSignal: AbortSignal;
++    isVoiceMode: boolean;
++  }): Promise<void> {
++    const { prepared, group, isLast, emitMessage, abortSignal, isVoiceMode } = params;
++    try {
++      const buffers: Buffer[] = [];
++      for await (const chunk of prepared.stream) {
++        if (abortSignal.aborted) return;
++        buffers.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
++      }
++      if (abortSignal.aborted || buffers.length === 0) return;
++
++      const chunkIndex = group.nextChunkIndex;
++      group.nextChunkIndex += 1;
++      group.pending.pendingChunks += 1;
++      if (chunkIndex === 0) {
++        buffers.unshift(leadInSilence(prepared.format));
++      }
++      emitMessage({
++        type: "audio_output",
++        payload: {
++          id: `${group.audioId}:${chunkIndex}`,
++          groupId: group.audioId,
++          chunkIndex,
++          isLastChunk: isLast,
++          audio: Buffer.concat(buffers).toString("base64"),
++          format: prepared.format,
++          isVoiceMode,
++        },
++      });
++    } finally {
++      this.destroySpeechStream(prepared.stream);
++    }
++  }
++
++  private async finishPlaybackGroup(group: PlaybackGroup): Promise<void> {
++    group.pending.streamEnded = true;
++    if (group.pending.pendingChunks === 0) {
++      group.close();
++    }
++    await group.done;
++  }
++
+   private async emitPreparedSegment(params: {
+     prepared: PreparedTtsSegment;
+     emitMessage: (msg: SessionOutboundMessage) => void;
+@@ -446,8 +577,10 @@ export class TTSManager {
+   /**
+    * Called when client confirms audio playback completed
+    * Resolves the corresponding promise
++   * Returns false when the id belongs to no playback of this manager, so a caller
++   * can hand it to another manager.
+    */
+-  public confirmAudioPlayed(chunkId: string): void {
++  public confirmAudioPlayed(chunkId: string): boolean {
+     const [audioId] = chunkId.includes(":") ? chunkId.split(":") : [chunkId];
+     const pending = this.pendingPlaybacks.get(audioId);
+ 
+@@ -457,10 +590,9 @@ export class TTSManager {
+       const expiresAt = this.recentlyClosedAudioIds.get(audioId);
+       if (expiresAt && expiresAt > now) {
+         this.logger.debug({ chunkId }, "Ignoring late confirmation for recently closed audio ID");
+-        return;
++        return true;
+       }
+-      this.logger.warn({ chunkId }, "Received confirmation for unknown audio ID");
+-      return;
++      return false;
+     }
+ 
+     pending.pendingChunks = Math.max(0, pending.pendingChunks - 1);
+@@ -470,6 +602,7 @@ export class TTSManager {
+       this.pendingPlaybacks.delete(audioId);
+       this.rememberClosedAudioId(audioId);
+     }
++    return true;
+   }
+ 
+   /**
+diff --git a/packages/server/src/server/session.test.ts b/packages/server/src/server/session.test.ts
+index 261e458a3..9863672f1 100644
+--- a/packages/server/src/server/session.test.ts
++++ b/packages/server/src/server/session.test.ts
+@@ -296,6 +296,7 @@ interface SessionForTestOptions {
+   workspaceRuntimeStore?: WorkspaceRuntimeStore;
+   sendToSource?: SessionOptions["onMessageToSource"];
+   clientId?: string;
++  clientType?: SessionOptions["clientType"];
+   permissions?: readonly DaemonPermission[];
+   agentManager?: { [K in keyof SessionOptions["agentManager"]]?: unknown };
+   agentStorage?: { [K in keyof SessionOptions["agentStorage"]]?: unknown };
+@@ -378,6 +379,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
+     agentMessages: createAgentMessageDeliveryStub(),
+     creationService: createTestCreationService(),
+     clientId: options.clientId ?? "test-client",
++    clientType: options.clientType,
+     onMessage: (message) => messages.push(message),
+     ...(options.targetedMessages
+       ? {
+@@ -5972,3 +5974,22 @@ test("wait_for_finish during an in-flight reload waits for the reload instead of
+   expect(response?.payload.error).toBeNull();
+   expect(response?.payload.lastMessage).toBe("post-reload answer");
+ });
++
++test("isAppClient follows the client type the hello declared", () => {
++  // The daemon speaker only sends a spoken report to an app socket. A CLI, MCP or hub
++  // socket must never receive one, so the type has to survive from the hello onto the
++  // session — it is the only thing that distinguishes them once connected.
++  const expected: Array<[SessionOptions["clientType"], boolean]> = [
++    ["mobile", true],
++    ["browser", true],
++    ["cli", false],
++    ["mcp", false],
++    ["hub", false],
++    [undefined, false],
++  ];
++  for (const [clientType, isApp] of expected) {
++    expect(createSessionForTest({ clientType }).isAppClient(), `clientType=${clientType}`).toBe(
++      isApp,
++    );
++  }
++});
+diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
+index a7cdb2f12..481e87cec 100644
+--- a/packages/server/src/server/session.ts
++++ b/packages/server/src/server/session.ts
+@@ -14,7 +14,11 @@ import type {
+ import { relative } from "node:path";
+ import { isAbsolute } from "node:path";
+ import { CreationService, type CreatedAgent } from "./creation/index.js";
+-import type { CreationSnapshot, AgentCreateRequest } from "@getpaseo/protocol/messages";
++import type {
++  CreationSnapshot,
++  AgentCreateRequest,
++  WSHelloMessage,
++} from "@getpaseo/protocol/messages";
+ import type { MessageReceipts } from "./message-receipts/index.js";
+ import equal from "fast-deep-equal";
+ import { WorkspaceSetupObservation } from "./workspace-setup-observation.js";
+@@ -446,6 +450,8 @@ export interface SessionOptions {
+   permissions: readonly DaemonPermission[];
+   appVersion?: string | null;
+   clientCapabilities?: Record<string, unknown> | null;
++  /** From the hello; carried so daemon speech can target app sockets only. */
++  clientType?: WSHelloMessage["clientType"];
+   onMessage: (msg: SessionOutboundMessage) => void;
+   onMessageToSource?: (source: object, msg: SessionOutboundMessage) => void | Promise<void>;
+   onBinaryMessage?: (frame: Uint8Array) => void;
+@@ -553,6 +559,7 @@ export interface SessionOptions {
+     unregisterVoiceSpeakHandler?: (agentId: string) => void;
+     registerVoiceCallerContext?: (agentId: string, context: VoiceCallerContext) => void;
+     unregisterVoiceCallerContext?: (agentId: string) => void;
++    confirmDaemonAudioPlayed?: (chunkId: string) => boolean;
+   };
+   dictation?: {
+     finalTimeoutMs?: number;
+@@ -716,6 +723,12 @@ export class Session {
+   );
+   private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
+   private readonly clientId: string;
++  // Which client asked for this session. The daemon speaker needs it to tell an
++  // app socket (mobile/browser) from a CLI, MCP or hub socket, because only app
++  // sockets can play a spoken report: see speech/daemon-speaker.ts.
++  private readonly clientType: SessionOptions["clientType"];
++  private lastInteractionAtMs = 0;
++  private readonly userPromptAtByAgent = new Map<string, number>();
+   private readonly authorization: SessionAuthorization;
+   private appVersion: string | null;
+   private clientCapabilities: ReadonlySet<ClientCapability>;
+@@ -882,6 +895,7 @@ export class Session {
+     } = options;
+     this.browserToolsBroker = options.browserToolsBroker;
+     this.clientId = clientId;
++    this.clientType = options.clientType;
+     this.authorization = new SessionAuthorization(permissions);
+ 
+     this.appVersion = appVersion ?? null;
+@@ -1610,10 +1624,28 @@ export class Session {
+     };
+   }
+ 
++  public lastUserPromptAt(agentId: string): number {
++    return this.userPromptAtByAgent.get(agentId) ?? 0;
++  }
++
++  public lastInteractionAt(): number {
++    return this.lastInteractionAtMs;
++  }
++
++  public isAppClient(): boolean {
++    return this.clientType === "mobile" || this.clientType === "browser";
++  }
++
+   public emitServerMessage(message: SessionOutboundMessage): void {
+     this.emit(message);
+   }
+ 
++  /** Daemon-originated message for every socket of this session, whatever request it came from. */
++  public sendToAllSources(message: SessionOutboundMessage): void {
++    if (!this.authorization.allowsOutbound(message)) return;
++    this.delivery.broadcast(message);
++  }
++
+   /**
+    * Send initial state to client after connection
+    */
+@@ -2183,6 +2215,8 @@ export class Session {
+   }
+ 
+   private async handleRequest(msg: SessionInboundMessage, source?: object): Promise<void> {
++    // Heartbeats come from idle background clients too; only real requests show where Des is.
++    if (msg.type !== "ping") this.lastInteractionAtMs = Date.now();
+     this.inflightRequests++;
+     if (this.inflightRequests > this.peakInflightRequests) {
+       this.peakInflightRequests = this.inflightRequests;
+@@ -8225,6 +8259,8 @@ export class Session {
+ 
+     try {
+       const agentId = resolved.agentId;
++      // Prompts from other agents are not Des typing; `speak` follows the client he typed on.
++      if (!msg.sourceAgentId) this.userPromptAtByAgent.set(agentId, Date.now());
+ 
+       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
+       this.sessionLogger.trace(
+diff --git a/packages/server/src/server/session/owned-subscriptions/index.test.ts b/packages/server/src/server/session/owned-subscriptions/index.test.ts
+index 4f4ab5838..94d03d519 100644
+--- a/packages/server/src/server/session/owned-subscriptions/index.test.ts
++++ b/packages/server/src/server/session/owned-subscriptions/index.test.ts
+@@ -1,6 +1,7 @@
+ import { execFileSync } from "node:child_process";
+ import { fileURLToPath } from "node:url";
+ import { expect, test } from "vitest";
++import type { SessionOutboundMessage } from "../../messages.js";
+ import { SessionDelivery } from "./index.js";
+ 
+ function retainedPromiseBytes(cycles: number): number {
+@@ -206,3 +207,38 @@ test("owned send completion retains source proofs and reports physical failures
+   );
+   await delivery.close();
+ });
++
++test("a daemon broadcast reaches every attached source and is permitted on modern sockets", async () => {
++  const sent: Array<{ source: object; message: SessionOutboundMessage }> = [];
++  const delivery = new SessionDelivery((source, message) => sent.push({ source, message }));
++  const modern = {};
++  const legacy = {};
++  const detached = {};
++  delivery.attach(modern, true);
++  delivery.attach(legacy, false);
++  delivery.attach(detached, true);
++  await delivery.detach(detached);
++  const message: SessionOutboundMessage = {
++    type: "audio_output",
++    payload: {
++      id: "audio-1:0",
++      groupId: "audio-1",
++      chunkIndex: 0,
++      isLastChunk: true,
++      audio: "AAAA",
++      format: "pcm;rate=24000",
++      isVoiceMode: false,
++    },
++  };
++
++  delivery.broadcast(message);
++
++  expect(sent.map((entry) => entry.source)).toEqual([modern, legacy]);
++  for (const entry of sent) {
++    expect(entry.message).toMatchObject({ type: "audio_output" });
++    expect(delivery.permits(entry.source, entry.message)).toBe(true);
++  }
++  // A message nobody owns stays refused on a modern socket.
++  expect(delivery.permits(modern, { ...message })).toBe(false);
++  await delivery.close();
++});
+diff --git a/packages/server/src/server/session/owned-subscriptions/index.ts b/packages/server/src/server/session/owned-subscriptions/index.ts
+index c17e5829b..fcae4847a 100644
+--- a/packages/server/src/server/session/owned-subscriptions/index.ts
++++ b/packages/server/src/server/session/owned-subscriptions/index.ts
+@@ -430,6 +430,20 @@ export class SessionDelivery {
+     return owner?.active === true && owner.source === source;
+   }
+ 
++  /**
++   * A daemon-originated message for every attached source, outside any request. Modern
++   * sockets refuse messages nobody owns, so each source gets a one-shot owner for it. Proofs
++   * are keyed by message identity, so every source is sent its own copy.
++   */
++  broadcast(message: SessionOutboundMessage): void {
++    if (this.closing) return;
++    for (const source of this.sources.values()) {
++      if (!source.active) continue;
++      const copy = { ...(source.modern ? message : legacyMessage(message)) };
++      this.sendOwned({ source, active: true }, copy);
++    }
++  }
++
+   private sendOwned(owner: DeliveryOwner, message: SessionOutboundMessage): void {
+     const projected = this.project(owner.source.socket, message);
+     this.proofs.set(projected, owner);
+diff --git a/packages/server/src/server/session/voice/voice-session.test.ts b/packages/server/src/server/session/voice/voice-session.test.ts
+index 1511d6f2f..8c5f514d7 100644
+--- a/packages/server/src/server/session/voice/voice-session.test.ts
++++ b/packages/server/src/server/session/voice/voice-session.test.ts
+@@ -82,7 +82,10 @@ function createFakeHost(): FakeVoiceHost {
+   };
+ }
+ 
+-function createVoiceSession(tts: TextToSpeechProvider | null = null) {
++function createVoiceSession(
++  tts: TextToSpeechProvider | null = null,
++  confirmDaemonAudioPlayed?: (chunkId: string) => boolean,
++) {
+   let speakHandler: VoiceSpeakHandler | undefined;
+   const detector = new FakeVoiceTurnDetectionSession();
+   const sttSession = new FakeVoiceSttSession();
+@@ -105,6 +108,7 @@ function createVoiceSession(tts: TextToSpeechProvider | null = null) {
+       registerVoiceSpeakHandler: (_id, handler) => {
+         speakHandler = handler;
+       },
++      confirmDaemonAudioPlayed,
+     },
+     stt,
+     voice: { turnDetection },
+@@ -136,6 +140,36 @@ async function settle(): Promise<void> {
+ }
+ 
+ describe("VoiceSession streaming transcription", () => {
++  test("hands a confirmation its own TTS does not know to the daemon speaker", () => {
++    const confirmDaemonAudioPlayed = vi.fn(() => true);
++    const { voiceSession } = createVoiceSession(null, confirmDaemonAudioPlayed);
++
++    voiceSession.handleAudioPlayed("daemon-audio:0");
++
++    expect(confirmDaemonAudioPlayed).toHaveBeenCalledWith("daemon-audio:0");
++  });
++
++  test("keeps a confirmation its own TTS owns away from the daemon speaker", async () => {
++    const confirmDaemonAudioPlayed = vi.fn(() => true);
++    const tts: TextToSpeechProvider = {
++      async synthesizeSpeech() {
++        return { stream: Readable.from([Buffer.from("audio")]), format: "pcm;rate=24000" };
++      },
++    };
++    const { voiceSession, host, speak } = createVoiceSession(tts, confirmDaemonAudioPlayed);
++    const emit = host.emit;
++    host.emit = (message: SessionOutboundMessage) => {
++      emit(message);
++      if (message.type === "audio_output") voiceSession.handleAudioPlayed(message.payload.id);
++    };
++    await voiceSession.handleSetVoiceMode(true, VOICE_AGENT_ID);
++
++    await speak({ text: "Chat mode speech." });
++
++    expect(confirmDaemonAudioPlayed).not.toHaveBeenCalled();
++    await voiceSession.cleanup();
++  });
++
+   test("interrupts playback and the agent on speech detection without partial transcripts", async () => {
+     const tts: TextToSpeechProvider = {
+       async synthesizeSpeech() {
+diff --git a/packages/server/src/server/session/voice/voice-session.ts b/packages/server/src/server/session/voice/voice-session.ts
+index 95537dd02..5e997cd2d 100644
+--- a/packages/server/src/server/session/voice/voice-session.ts
++++ b/packages/server/src/server/session/voice/voice-session.ts
+@@ -147,6 +147,7 @@ export interface VoiceSessionOptions {
+     unregisterVoiceSpeakHandler?: (agentId: string) => void;
+     registerVoiceCallerContext?: (agentId: string, context: VoiceCallerContext) => void;
+     unregisterVoiceCallerContext?: (agentId: string) => void;
++    confirmDaemonAudioPlayed?: (chunkId: string) => boolean;
+   };
+   dictation?: {
+     finalTimeoutMs?: number;
+@@ -205,6 +206,7 @@ export class VoiceSession {
+     context: VoiceCallerContext,
+   ) => void;
+   private readonly unregisterVoiceCallerContext?: (agentId: string) => void;
++  private readonly confirmDaemonAudioPlayed?: (chunkId: string) => boolean;
+   private readonly getSpeechReadiness?: () => SpeechReadinessSnapshot;
+ 
+   private voiceModeAgentId: string | null = null;
+@@ -225,6 +227,7 @@ export class VoiceSession {
+     this.unregisterVoiceSpeakHandler = voiceBridge?.unregisterVoiceSpeakHandler;
+     this.registerVoiceCallerContext = voiceBridge?.registerVoiceCallerContext;
+     this.unregisterVoiceCallerContext = voiceBridge?.unregisterVoiceCallerContext;
++    this.confirmDaemonAudioPlayed = voiceBridge?.confirmDaemonAudioPlayed;
+     this.getSpeechReadiness = dictation?.getSpeechReadiness;
+ 
+     this.ttsManager = new TTSManager(this.sessionId, this.sessionLogger, tts);
+@@ -1140,7 +1143,9 @@ export class VoiceSession {
+    * Handle audio playback confirmation from client
+    */
+   handleAudioPlayed(id: string): void {
+-    this.ttsManager.confirmAudioPlayed(id);
++    if (this.ttsManager.confirmAudioPlayed(id)) return;
++    if (this.confirmDaemonAudioPlayed?.(id)) return;
++    this.sessionLogger.warn({ chunkId: id }, "Received confirmation for unknown audio ID");
+   }
+ 
+   /**
+diff --git a/packages/server/src/server/speech/daemon-speaker.test.ts b/packages/server/src/server/speech/daemon-speaker.test.ts
+new file mode 100644
+index 000000000..88f9ffe1e
+--- /dev/null
++++ b/packages/server/src/server/speech/daemon-speaker.test.ts
+@@ -0,0 +1,192 @@
++import { Readable } from "node:stream";
++import pino from "pino";
++import { describe, expect, it, vi } from "vitest";
++
++import type { SessionOutboundMessage } from "../messages.js";
++import { createDaemonSpeaker } from "./daemon-speaker.js";
++import type { TextToSpeechProvider } from "./speech-provider.js";
++
++const tts: TextToSpeechProvider = {
++  async synthesizeSpeech() {
++    return { stream: Readable.from([Buffer.from("audio")]), format: "pcm;rate=24000" };
++  },
++};
++
++// Later clients were active more recently: client 0 is the stalest.
++function createClients(count: number) {
++  const received: SessionOutboundMessage[][] = Array.from({ length: count }, () => []);
++  const sessions = received.map((messages, index) => ({
++    isAppClient: () => true,
++    lastInteractionAt: () => 1000 + index,
++    lastUserPromptAt: (_agentId: string) => 0,
++    sendToAllSources: (message: SessionOutboundMessage) => {
++      messages.push(message);
++    },
++  }));
++  return { received, sessions };
++}
++
++function createSpeaker(options: {
++  tts?: TextToSpeechProvider | null;
++  sessions: Array<{
++    isAppClient: () => boolean;
++    lastInteractionAt: () => number;
++    lastUserPromptAt: (agentId: string) => number;
++    sendToAllSources: (message: SessionOutboundMessage) => void;
++  }>;
++  playbackTimeoutMs?: number;
++}) {
++  return createDaemonSpeaker({
++    logger: pino({ level: "silent" }),
++    resolveTts: () => (options.tts === undefined ? tts : options.tts),
++    listSessions: () => options.sessions,
++    playbackTimeoutMs: options.playbackTimeoutMs,
++  });
++}
++
++describe("createDaemonSpeaker", () => {
++  it("plays on the most recently active app client only and resolves on its confirmation", async () => {
++    const { received, sessions } = createClients(2);
++    const speaker = createSpeaker({ sessions });
++
++    const playback = speaker.speak({ text: "Spoken report.", callerAgentId: "agent-1" });
++    await vi.waitFor(() => expect(received[1]).toHaveLength(1));
++
++    expect(received[1][0]).toMatchObject({
++      type: "audio_output",
++      payload: { isVoiceMode: false, isLastChunk: true },
++    });
++    expect(received[0]).toHaveLength(0);
++    const message = received[1][0];
++    if (message.type !== "audio_output") throw new Error("expected audio_output");
++
++    expect(speaker.confirmAudioPlayed(message.payload.id)).toBe(true);
++    await playback;
++    expect(speaker.confirmAudioPlayed(message.payload.id)).toBe(true);
++  });
++
++  it("plays on the client where Des last typed a prompt in this agent's chat, not the busiest client", async () => {
++    const { received, sessions } = createClients(2);
++    // Client 1 is busier (newer interaction), but Des typed in this chat on client 0.
++    sessions[0].lastUserPromptAt = (agentId) => (agentId === "agent-1" ? 500 : 0);
++    sessions[1].lastUserPromptAt = (agentId) => (agentId === "agent-2" ? 900 : 0);
++    const speaker = createSpeaker({ sessions });
++
++    const playback = speaker.speak({ text: "Spoken report.", callerAgentId: "agent-1" });
++    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
++    expect(received[1]).toHaveLength(0);
++    const message = received[0][0];
++    if (message.type !== "audio_output") throw new Error("expected audio_output");
++    speaker.confirmAudioPlayed(message.payload.id);
++    await playback;
++  });
++
++  it("keeps playing on the same client for a whole report, then re-picks for the next", async () => {
++    const { received, sessions } = createClients(2);
++    const speaker = createSpeaker({ sessions });
++    const confirmAll = (index: number) => {
++      for (const message of received[index]) {
++        if (message.type === "audio_output") speaker.confirmAudioPlayed(message.payload.id);
++      }
++    };
++
++    const first = speaker.speak({
++      text: "One sentence. Another sentence.",
++      callerAgentId: "agent-1",
++    });
++    // Every sentence arrives before playback starts, as one chunk group the app plays as a
++    // single clip, so there is no gap between sentences for a car's Bluetooth to drop in.
++    await vi.waitFor(() => expect(received[1]).toHaveLength(2));
++    const [one, another] = received[1];
++    if (one.type !== "audio_output" || another.type !== "audio_output") {
++      throw new Error("expected audio_output");
++    }
++    expect(one.payload.groupId).toBe(another.payload.groupId);
++    expect([one.payload.isLastChunk, another.payload.isLastChunk]).toEqual([false, true]);
++    // The stale client becomes the active one mid-report; the report stays where it started.
++    sessions[0].lastInteractionAt = () => 5000;
++    confirmAll(1);
++    await first;
++    expect(received[0]).toHaveLength(0);
++
++    const second = speaker.speak({ text: "Next report.", callerAgentId: "agent-1" });
++    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
++    confirmAll(0);
++    await second;
++  });
++
++  it("does not claim a confirmation for audio it did not send", () => {
++    const { sessions } = createClients(1);
++    const speaker = createSpeaker({ sessions });
++
++    expect(speaker.confirmAudioPlayed("voice-session-audio:0")).toBe(false);
++  });
++
++  it("rejects when no app client is connected", async () => {
++    const speaker = createSpeaker({ sessions: [] });
++
++    await expect(speaker.speak({ text: "Hello.", callerAgentId: "agent-1" })).rejects.toThrow(
++      "No app client is connected",
++    );
++  });
++
++  it("ignores plugin and CLI sessions: they neither count as clients nor get the audio", async () => {
++    const plugin: SessionOutboundMessage[] = [];
++    const pluginSession = {
++      isAppClient: () => false,
++      lastInteractionAt: () => 9999,
++      lastUserPromptAt: () => 9999,
++      sendToAllSources: (message: SessionOutboundMessage) => {
++        plugin.push(message);
++      },
++    };
++    const noApp = createSpeaker({ sessions: [pluginSession] });
++    await expect(noApp.speak({ text: "Hello.", callerAgentId: "agent-1" })).rejects.toThrow(
++      "No app client is connected",
++    );
++
++    const { received, sessions } = createClients(1);
++    const speaker = createSpeaker({ sessions: [pluginSession, ...sessions] });
++    const playback = speaker.speak({ text: "Hello.", callerAgentId: "agent-1" });
++    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
++    const message = received[0][0];
++    if (message.type !== "audio_output") throw new Error("expected audio_output");
++    speaker.confirmAudioPlayed(message.payload.id);
++    await playback;
++    expect(plugin).toHaveLength(0);
++  });
++
++  it("rejects when TTS is not configured", async () => {
++    const { sessions } = createClients(1);
++    const speaker = createSpeaker({ sessions, tts: null });
++
++    await expect(speaker.speak({ text: "Hello.", callerAgentId: "agent-1" })).rejects.toThrow(
++      "TTS not configured",
++    );
++  });
++
++  it("rejects when no client confirms playback in time", async () => {
++    const { sessions } = createClients(1);
++    const speaker = createSpeaker({ sessions, playbackTimeoutMs: 30 });
++
++    await expect(speaker.speak({ text: "Hello.", callerAgentId: "agent-1" })).rejects.toThrow(
++      "No app client confirmed playback",
++    );
++  });
++
++  it("stops when the calling tool aborts", async () => {
++    const { received, sessions } = createClients(1);
++    const speaker = createSpeaker({ sessions });
++    const abort = new AbortController();
++
++    const playback = speaker.speak({
++      text: "Hello.",
++      callerAgentId: "agent-1",
++      signal: abort.signal,
++    });
++    await vi.waitFor(() => expect(received[0]).toHaveLength(1));
++    abort.abort();
++
++    await expect(playback).resolves.toBeUndefined();
++  });
++});
+diff --git a/packages/server/src/server/speech/daemon-speaker.ts b/packages/server/src/server/speech/daemon-speaker.ts
+new file mode 100644
+index 000000000..9025f6e58
+--- /dev/null
++++ b/packages/server/src/server/speech/daemon-speaker.ts
+@@ -0,0 +1,112 @@
++import type pino from "pino";
++
++import { TTSManager } from "../agent/tts-manager.js";
++import type { SessionOutboundMessage } from "../messages.js";
++import type { VoiceSpeakHandler } from "../voice-types.js";
++import type { TextToSpeechProvider } from "./speech-provider.js";
++
++// A 4000 character report plays for about five minutes; leave room for synthesis.
++const DEFAULT_PLAYBACK_TIMEOUT_MS = 10 * 60 * 1000;
++
++interface DaemonSpeakerSession {
++  /** Mobile and browser/desktop app sessions play audio; plugin, CLI and MCP sessions do not. */
++  isAppClient(): boolean;
++  /** When the client last did something (not a heartbeat), in epoch milliseconds. */
++  lastInteractionAt(): number;
++  /** When the user last typed a prompt to this agent on this client; 0 if never. */
++  lastUserPromptAt(agentId: string): number;
++  sendToAllSources(message: SessionOutboundMessage): void;
++}
++
++export interface DaemonSpeaker {
++  /** The `speak` tool handler for agents that have no voice session of their own. */
++  speak: VoiceSpeakHandler;
++  /** True when the id belongs to audio this speaker sent. */
++  confirmAudioPlayed(chunkId: string): boolean;
++}
++
++function mostRecentlyActive(sessions: DaemonSpeakerSession[]): DaemonSpeakerSession | null {
++  let best: DaemonSpeakerSession | null = null;
++  for (const session of sessions) {
++    if (!best || session.lastInteractionAt() >= best.lastInteractionAt()) best = session;
++  }
++  return best;
++}
++
++/**
++ * The client where Des last typed a prompt in this agent's chat. Prompts from other agents
++ * do not count. With no such prompt on any client, the most recently active client.
++ */
++function pickPlayer(
++  sessions: DaemonSpeakerSession[],
++  agentId: string,
++): DaemonSpeakerSession | null {
++  let best: DaemonSpeakerSession | null = null;
++  for (const session of sessions) {
++    const promptAt = session.lastUserPromptAt(agentId);
++    if (promptAt > 0 && (!best || promptAt >= best.lastUserPromptAt(agentId))) best = session;
++  }
++  return best ?? mostRecentlyActive(sessions);
++}
++
++/**
++ * Speaks for agents outside chat mode. Audio goes to the app client where Des last typed in the agent\'s chat, with
++ * isVoiceMode false, which the app plays without a voice session. Clients answer with
++ * audio_played; the first answer per chunk resolves the call, later ones are ignored.
++ */
++export function createDaemonSpeaker(options: {
++  logger: pino.Logger;
++  resolveTts: () => TextToSpeechProvider | null;
++  listSessions: () => DaemonSpeakerSession[];
++  playbackTimeoutMs?: number;
++}): DaemonSpeaker {
++  const { logger, resolveTts, listSessions } = options;
++  const playbackTimeoutMs = options.playbackTimeoutMs ?? DEFAULT_PLAYBACK_TIMEOUT_MS;
++  const ttsManager = new TTSManager("daemon-speaker", logger, resolveTts);
++  const listAppSessions = () => listSessions().filter((session) => session.isAppClient());
++
++  const speak: VoiceSpeakHandler = async ({ text, callerAgentId, signal }) => {
++    if (!resolveTts()) {
++      throw new Error("TTS not configured");
++    }
++    if (listAppSessions().length === 0) {
++      throw new Error("No app client is connected to play speech");
++    }
++    logger.info({ agentId: callerAgentId, textLength: text.length }, "Daemon speak tool call");
++
++    // One client plays a whole report: the one Des last typed in. Every connected client
++    // playing it at once sounds like an echo.
++    let player: DaemonSpeakerSession | null = null;
++    const timeout = AbortSignal.timeout(playbackTimeoutMs);
++    const abortSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
++    await ttsManager.generateAndWaitForPlayback(
++      text,
++      (message) => {
++        const sessions = listAppSessions();
++        if (!player || !sessions.includes(player)) player = pickPlayer(sessions, callerAgentId);
++        logger.info(
++          { agentId: callerAgentId, messageType: message.type, appClients: sessions.length },
++          "Daemon speak sending audio to the client of the last user prompt",
++        );
++        player?.sendToAllSources(message);
++      },
++      abortSignal,
++      false,
++      // One clip for the whole report: a gap between sentence clips lets a car's Bluetooth
++      // drop to the radio and clips the first words of the next sentence.
++      true,
++    );
++    if (timeout.aborted && !signal?.aborted) {
++      throw new Error("No app client confirmed playback");
++    }
++  };
++
++  return {
++    speak,
++    confirmAudioPlayed: (chunkId) => {
++      const known = ttsManager.confirmAudioPlayed(chunkId);
++      if (known) logger.info({ chunkId }, "Daemon speak playback confirmed by an app client");
++      return known;
++    },
++  };
++}
+diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
+index 88fb2c327..c89dd77f3 100644
+--- a/packages/server/src/server/websocket-server.ts
++++ b/packages/server/src/server/websocket-server.ts
+@@ -79,6 +79,7 @@ import {
+ import type { ScriptHealthState } from "./script-health-monitor.js";
+ import type { ServiceProxySubsystem } from "./service-proxy.js";
+ import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
++import { createDaemonSpeaker, type DaemonSpeaker } from "./speech/daemon-speaker.js";
+ import type { SpeechReadinessSnapshot, SpeechService } from "./speech/speech-runtime.js";
+ import type { VoiceCallerContext, VoiceSpeakHandler } from "./voice-types.js";
+ import {
+@@ -482,6 +483,7 @@ interface SocketSessionOptions {
+   clientId: string;
+   appVersion: string | null;
+   clientCapabilities: Record<string, unknown> | null;
++  clientType?: WSHelloMessage["clientType"];
+   permissions: readonly DaemonPermission[];
+   connectionLogger: pino.Logger;
+   onMessage: (message: SessionOutboundMessage) => void;
+@@ -597,6 +599,7 @@ export class VoiceAssistantWebSocketServer {
+   private readonly voiceSpeakHandlers = new Map<string, VoiceSpeakHandler>();
+   private readonly voiceCallerContexts = new Map<string, VoiceCallerContext>();
+   private readonly workspaceSetupObservation = new WorkspaceSetupObservation();
++  private readonly daemonSpeaker: DaemonSpeaker;
+   private readonly workspaceSetupRuntime: WorkspaceSetupRuntime;
+   private readonly providerSnapshotManager: ProviderSnapshotManager;
+   private onLifecycleIntent!: ((intent: SessionLifecycleIntent) => void) | null;
+@@ -690,6 +693,11 @@ export class VoiceAssistantWebSocketServer {
+     workspaceLabelService?: WorkspaceLabelService,
+   ) {
+     this.logger = logger.child({ module: "websocket-server" });
++    this.daemonSpeaker = createDaemonSpeaker({
++      logger: this.logger,
++      resolveTts: () => this.speech?.resolveTts() ?? null,
++      listSessions: () => this.listSessions(),
++    });
+     this.workspaceSetupRuntime = workspaceSetupRuntime;
+     this.advertiseDaemonStatusRpc = wsConfig.daemonStatusRpc !== false;
+     this.advertiseRelayConfig = wsConfig.relayConfig !== false;
+@@ -1476,18 +1484,28 @@ export class VoiceAssistantWebSocketServer {
+     clientId: string;
+     appVersion: string | null;
+     clientCapabilities: Record<string, unknown> | null;
++    clientType?: WSHelloMessage["clientType"];
+     connectionLogger: pino.Logger;
+     lifecycle: { kind: "reconnectable" } | { kind: "ephemeral-plugin"; pluginId: string };
+     admission: SessionAdmission;
+   }): SessionConnection {
+-    const { ws, clientId, appVersion, clientCapabilities, connectionLogger, lifecycle, admission } =
+-      params;
++    const {
++      ws,
++      clientId,
++      appVersion,
++      clientCapabilities,
++      clientType,
++      connectionLogger,
++      lifecycle,
++      admission,
++    } = params;
+     let connection: SessionConnection | null = null;
+ 
+     const session = this.createSocketSession({
+       clientId,
+       appVersion,
+       clientCapabilities,
++      clientType,
+       permissions: admission.permissions,
+       sourceId:
+         lifecycle.kind === "ephemeral-plugin"
+@@ -1578,6 +1596,7 @@ export class VoiceAssistantWebSocketServer {
+       clientId: options.clientId,
+       appVersion: options.appVersion,
+       clientCapabilities: options.clientCapabilities,
++      clientType: options.clientType,
+       permissions: options.permissions,
+       onMessage: options.onMessage,
+       onMessageToSource: options.onMessageToSource,
+@@ -1651,6 +1670,7 @@ export class VoiceAssistantWebSocketServer {
+         unregisterVoiceCallerContext: (agentId) => {
+           this.voiceCallerContexts.delete(agentId);
+         },
++        confirmDaemonAudioPlayed: (chunkId) => this.daemonSpeaker.confirmAudioPlayed(chunkId),
+       },
+       dictation:
+         this.dictation || this.speech
+@@ -1757,6 +1777,7 @@ export class VoiceAssistantWebSocketServer {
+       clientId,
+       appVersion: message.appVersion ?? null,
+       clientCapabilities: message.capabilities ?? null,
++      clientType: message.clientType,
+       connectionLogger,
+       lifecycle: pluginId ? { kind: "ephemeral-plugin", pluginId } : { kind: "reconnectable" },
+       admission: admitted,
+@@ -2178,8 +2199,9 @@ export class VoiceAssistantWebSocketServer {
+     });
+   }
+ 
+-  public resolveVoiceSpeakHandler(callerAgentId: string): VoiceSpeakHandler | null {
+-    return this.voiceSpeakHandlers.get(callerAgentId) ?? null;
++  /** A voice session's own handler wins; every other agent speaks through the daemon. */
++  public resolveVoiceSpeakHandler(callerAgentId: string): VoiceSpeakHandler {
++    return this.voiceSpeakHandlers.get(callerAgentId) ?? this.daemonSpeaker.speak;
+   }
+ 
+   public resolveVoiceCallerContext(callerAgentId: string): VoiceCallerContext | null {
