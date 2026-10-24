@@ -8370,6 +8370,12 @@ export class Session {
         AbortSignal.any([abortController.signal, sourceSignal]),
       );
 
+      if (!this.agentManager.getAgent(agentId)) {
+        // A reload removes the agent from the live map for its whole duration;
+        // wait it out so the stored record's pre-reload status is not served as
+        // the wait result.
+        await this.agentManager.waitForAgentReload(agentId);
+      }
       const live = this.agentManager.getAgent(agentId);
       if (!live) {
         const settled = await this.readSettledAgent(agentId);
