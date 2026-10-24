@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
+import type { SessionOutboundMessage } from "../../messages.js";
 import { SessionDelivery } from "./index.js";
 
 function retainedPromiseBytes(cycles: number): number {
@@ -204,5 +205,40 @@ test("owned send completion retains source proofs and reports physical failures 
       );
     },
   );
+  await delivery.close();
+});
+
+test("a daemon broadcast reaches every attached source and is permitted on modern sockets", async () => {
+  const sent: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const delivery = new SessionDelivery((source, message) => sent.push({ source, message }));
+  const modern = {};
+  const legacy = {};
+  const detached = {};
+  delivery.attach(modern, true);
+  delivery.attach(legacy, false);
+  delivery.attach(detached, true);
+  await delivery.detach(detached);
+  const message: SessionOutboundMessage = {
+    type: "audio_output",
+    payload: {
+      id: "audio-1:0",
+      groupId: "audio-1",
+      chunkIndex: 0,
+      isLastChunk: true,
+      audio: "AAAA",
+      format: "pcm;rate=24000",
+      isVoiceMode: false,
+    },
+  };
+
+  delivery.broadcast(message);
+
+  expect(sent.map((entry) => entry.source)).toEqual([modern, legacy]);
+  for (const entry of sent) {
+    expect(entry.message).toMatchObject({ type: "audio_output" });
+    expect(delivery.permits(entry.source, entry.message)).toBe(true);
+  }
+  // A message nobody owns stays refused on a modern socket.
+  expect(delivery.permits(modern, { ...message })).toBe(false);
   await delivery.close();
 });

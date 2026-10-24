@@ -1307,46 +1307,44 @@ function createToolCatalog(
   type TopLevelCreateAgentArgs = z.infer<typeof canonicalTopLevelCreateAgentArgsSchema>;
   type LegacyTopLevelCreateAgentArgs = z.infer<typeof legacyTopLevelCreateAgentArgsSchema>;
 
-  if (options.voiceOnly || options.enableVoiceTools || callerContext?.enableVoiceTools) {
-    registerTool(
-      "speak",
-      {
-        title: "Speak",
-        description:
-          "Speak text to the user via daemon-managed voice output. Blocks until playback completes.",
-        inputSchema: {
-          text: z
-            .string()
-            .trim()
-            .min(1, "text is required")
-            .max(4000, "text must be 4000 characters or fewer"),
-        },
-        outputSchema: {
-          ok: z.boolean(),
-        },
+  registerTool(
+    "speak",
+    {
+      title: "Speak",
+      description:
+        "Speak text to Des through the Paseo app. Use this ONLY when Des asks you specifically for a spoken report; never on your own choice. Send the whole report in ONE call, never one call per sentence or paragraph: Des may hear it over car Bluetooth, which drops out between calls. Blocks until playback completes.",
+      inputSchema: {
+        text: z
+          .string()
+          .trim()
+          .min(1, "text is required")
+          .max(4000, "text must be 4000 characters or fewer"),
       },
-      async (args, context) => {
-        if (!callerAgentId) {
-          throw new PaseoToolInputError("speak is only available to agent-scoped tool sessions");
-        }
-        const handler = resolveSpeakHandler?.(callerAgentId) ?? null;
-        if (!handler) {
-          throw new PaseoToolInputError(
-            `No speak handler registered for your session '${callerAgentId}'`,
-          );
-        }
-        await handler({
-          text: args.text,
-          callerAgentId,
-          signal: context?.signal,
-        });
-        return {
-          content: [],
-          structuredContent: ensureValidJson({ ok: true }),
-        };
+      outputSchema: {
+        ok: z.boolean(),
       },
-    );
-  }
+    },
+    async (args, context) => {
+      if (!callerAgentId) {
+        throw new PaseoToolInputError("speak is only available to agent-scoped tool sessions");
+      }
+      const handler = resolveSpeakHandler?.(callerAgentId) ?? null;
+      if (!handler) {
+        throw new PaseoToolInputError(
+          `No speak handler registered for your session '${callerAgentId}'`,
+        );
+      }
+      await handler({
+        text: args.text,
+        callerAgentId,
+        signal: context?.signal,
+      });
+      return {
+        content: [],
+        structuredContent: ensureValidJson({ ok: true }),
+      };
+    },
+  );
 
   if (options.voiceOnly) {
     return toCatalog();

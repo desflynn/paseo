@@ -82,7 +82,10 @@ function createFakeHost(): FakeVoiceHost {
   };
 }
 
-function createVoiceSession(tts: TextToSpeechProvider | null = null) {
+function createVoiceSession(
+  tts: TextToSpeechProvider | null = null,
+  confirmDaemonAudioPlayed?: (chunkId: string) => boolean,
+) {
   let speakHandler: VoiceSpeakHandler | undefined;
   const detector = new FakeVoiceTurnDetectionSession();
   const sttSession = new FakeVoiceSttSession();
@@ -105,6 +108,7 @@ function createVoiceSession(tts: TextToSpeechProvider | null = null) {
       registerVoiceSpeakHandler: (_id, handler) => {
         speakHandler = handler;
       },
+      confirmDaemonAudioPlayed,
     },
     stt,
     voice: { turnDetection },
@@ -136,6 +140,36 @@ async function settle(): Promise<void> {
 }
 
 describe("VoiceSession streaming transcription", () => {
+  test("hands a confirmation its own TTS does not know to the daemon speaker", () => {
+    const confirmDaemonAudioPlayed = vi.fn(() => true);
+    const { voiceSession } = createVoiceSession(null, confirmDaemonAudioPlayed);
+
+    voiceSession.handleAudioPlayed("daemon-audio:0");
+
+    expect(confirmDaemonAudioPlayed).toHaveBeenCalledWith("daemon-audio:0");
+  });
+
+  test("keeps a confirmation its own TTS owns away from the daemon speaker", async () => {
+    const confirmDaemonAudioPlayed = vi.fn(() => true);
+    const tts: TextToSpeechProvider = {
+      async synthesizeSpeech() {
+        return { stream: Readable.from([Buffer.from("audio")]), format: "pcm;rate=24000" };
+      },
+    };
+    const { voiceSession, host, speak } = createVoiceSession(tts, confirmDaemonAudioPlayed);
+    const emit = host.emit;
+    host.emit = (message: SessionOutboundMessage) => {
+      emit(message);
+      if (message.type === "audio_output") voiceSession.handleAudioPlayed(message.payload.id);
+    };
+    await voiceSession.handleSetVoiceMode(true, VOICE_AGENT_ID);
+
+    await speak({ text: "Chat mode speech." });
+
+    expect(confirmDaemonAudioPlayed).not.toHaveBeenCalled();
+    await voiceSession.cleanup();
+  });
+
   test("interrupts playback and the agent on speech detection without partial transcripts", async () => {
     const tts: TextToSpeechProvider = {
       async synthesizeSpeech() {

@@ -14,7 +14,11 @@ import type {
 import { relative } from "node:path";
 import { isAbsolute } from "node:path";
 import { CreationService, type CreatedAgent } from "./creation/index.js";
-import type { CreationSnapshot, AgentCreateRequest } from "@getpaseo/protocol/messages";
+import type {
+  CreationSnapshot,
+  AgentCreateRequest,
+  WSHelloMessage,
+} from "@getpaseo/protocol/messages";
 import type { MessageReceipts } from "./message-receipts/index.js";
 import equal from "fast-deep-equal";
 import { WorkspaceSetupObservation } from "./workspace-setup-observation.js";
@@ -446,6 +450,8 @@ export interface SessionOptions {
   permissions: readonly DaemonPermission[];
   appVersion?: string | null;
   clientCapabilities?: Record<string, unknown> | null;
+  /** From the hello; carried so daemon speech can target app sockets only. */
+  clientType?: WSHelloMessage["clientType"];
   onMessage: (msg: SessionOutboundMessage) => void;
   onMessageToSource?: (source: object, msg: SessionOutboundMessage) => void | Promise<void>;
   onBinaryMessage?: (frame: Uint8Array) => void;
@@ -553,6 +559,7 @@ export interface SessionOptions {
     unregisterVoiceSpeakHandler?: (agentId: string) => void;
     registerVoiceCallerContext?: (agentId: string, context: VoiceCallerContext) => void;
     unregisterVoiceCallerContext?: (agentId: string) => void;
+    confirmDaemonAudioPlayed?: (chunkId: string) => boolean;
   };
   dictation?: {
     finalTimeoutMs?: number;
@@ -716,6 +723,12 @@ export class Session {
   );
   private readonly browserToolsBroker: SessionOptions["browserToolsBroker"];
   private readonly clientId: string;
+  // Which client asked for this session. The daemon speaker needs it to tell an
+  // app socket (mobile/browser) from a CLI, MCP or hub socket, because only app
+  // sockets can play a spoken report: see speech/daemon-speaker.ts.
+  private readonly clientType: SessionOptions["clientType"];
+  private lastInteractionAtMs = 0;
+  private readonly userPromptAtByAgent = new Map<string, number>();
   private readonly authorization: SessionAuthorization;
   private appVersion: string | null;
   private clientCapabilities: ReadonlySet<ClientCapability>;
@@ -882,6 +895,7 @@ export class Session {
     } = options;
     this.browserToolsBroker = options.browserToolsBroker;
     this.clientId = clientId;
+    this.clientType = options.clientType;
     this.authorization = new SessionAuthorization(permissions);
 
     this.appVersion = appVersion ?? null;
@@ -1610,8 +1624,26 @@ export class Session {
     };
   }
 
+  public lastUserPromptAt(agentId: string): number {
+    return this.userPromptAtByAgent.get(agentId) ?? 0;
+  }
+
+  public lastInteractionAt(): number {
+    return this.lastInteractionAtMs;
+  }
+
+  public isAppClient(): boolean {
+    return this.clientType === "mobile" || this.clientType === "browser";
+  }
+
   public emitServerMessage(message: SessionOutboundMessage): void {
     this.emit(message);
+  }
+
+  /** Daemon-originated message for every socket of this session, whatever request it came from. */
+  public sendToAllSources(message: SessionOutboundMessage): void {
+    if (!this.authorization.allowsOutbound(message)) return;
+    this.delivery.broadcast(message);
   }
 
   /**
@@ -2183,6 +2215,8 @@ export class Session {
   }
 
   private async handleRequest(msg: SessionInboundMessage, source?: object): Promise<void> {
+    // Heartbeats come from idle background clients too; only real requests show where Des is.
+    if (msg.type !== "ping") this.lastInteractionAtMs = Date.now();
     this.inflightRequests++;
     if (this.inflightRequests > this.peakInflightRequests) {
       this.peakInflightRequests = this.inflightRequests;
@@ -8225,6 +8259,8 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
+      // Prompts from other agents are not Des typing; `speak` follows the client he typed on.
+      if (!msg.sourceAgentId) this.userPromptAtByAgent.set(agentId, Date.now());
 
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       this.sessionLogger.trace(

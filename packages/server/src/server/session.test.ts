@@ -296,6 +296,7 @@ interface SessionForTestOptions {
   workspaceRuntimeStore?: WorkspaceRuntimeStore;
   sendToSource?: SessionOptions["onMessageToSource"];
   clientId?: string;
+  clientType?: SessionOptions["clientType"];
   permissions?: readonly DaemonPermission[];
   agentManager?: { [K in keyof SessionOptions["agentManager"]]?: unknown };
   agentStorage?: { [K in keyof SessionOptions["agentStorage"]]?: unknown };
@@ -378,6 +379,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
     agentMessages: createAgentMessageDeliveryStub(),
     creationService: createTestCreationService(),
     clientId: options.clientId ?? "test-client",
+    clientType: options.clientType,
     onMessage: (message) => messages.push(message),
     ...(options.targetedMessages
       ? {
@@ -5971,4 +5973,23 @@ test("wait_for_finish during an in-flight reload waits for the reload instead of
   expect(response?.payload.status).toBe("idle");
   expect(response?.payload.error).toBeNull();
   expect(response?.payload.lastMessage).toBe("post-reload answer");
+});
+
+test("isAppClient follows the client type the hello declared", () => {
+  // The daemon speaker only sends a spoken report to an app socket. A CLI, MCP or hub
+  // socket must never receive one, so the type has to survive from the hello onto the
+  // session — it is the only thing that distinguishes them once connected.
+  const expected: Array<[SessionOptions["clientType"], boolean]> = [
+    ["mobile", true],
+    ["browser", true],
+    ["cli", false],
+    ["mcp", false],
+    ["hub", false],
+    [undefined, false],
+  ];
+  for (const [clientType, isApp] of expected) {
+    expect(createSessionForTest({ clientType }).isAppClient(), `clientType=${clientType}`).toBe(
+      isApp,
+    );
+  }
 });

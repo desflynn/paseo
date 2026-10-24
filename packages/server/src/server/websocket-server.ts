@@ -79,6 +79,7 @@ import {
 import type { ScriptHealthState } from "./script-health-monitor.js";
 import type { ServiceProxySubsystem } from "./service-proxy.js";
 import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
+import { createDaemonSpeaker, type DaemonSpeaker } from "./speech/daemon-speaker.js";
 import type { SpeechReadinessSnapshot, SpeechService } from "./speech/speech-runtime.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "./voice-types.js";
 import {
@@ -482,6 +483,7 @@ interface SocketSessionOptions {
   clientId: string;
   appVersion: string | null;
   clientCapabilities: Record<string, unknown> | null;
+  clientType?: WSHelloMessage["clientType"];
   permissions: readonly DaemonPermission[];
   connectionLogger: pino.Logger;
   onMessage: (message: SessionOutboundMessage) => void;
@@ -597,6 +599,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly voiceSpeakHandlers = new Map<string, VoiceSpeakHandler>();
   private readonly voiceCallerContexts = new Map<string, VoiceCallerContext>();
   private readonly workspaceSetupObservation = new WorkspaceSetupObservation();
+  private readonly daemonSpeaker: DaemonSpeaker;
   private readonly workspaceSetupRuntime: WorkspaceSetupRuntime;
   private readonly providerSnapshotManager: ProviderSnapshotManager;
   private onLifecycleIntent!: ((intent: SessionLifecycleIntent) => void) | null;
@@ -690,6 +693,11 @@ export class VoiceAssistantWebSocketServer {
     workspaceLabelService?: WorkspaceLabelService,
   ) {
     this.logger = logger.child({ module: "websocket-server" });
+    this.daemonSpeaker = createDaemonSpeaker({
+      logger: this.logger,
+      resolveTts: () => this.speech?.resolveTts() ?? null,
+      listSessions: () => this.listSessions(),
+    });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
     this.advertiseDaemonStatusRpc = wsConfig.daemonStatusRpc !== false;
     this.advertiseRelayConfig = wsConfig.relayConfig !== false;
@@ -1476,18 +1484,28 @@ export class VoiceAssistantWebSocketServer {
     clientId: string;
     appVersion: string | null;
     clientCapabilities: Record<string, unknown> | null;
+    clientType?: WSHelloMessage["clientType"];
     connectionLogger: pino.Logger;
     lifecycle: { kind: "reconnectable" } | { kind: "ephemeral-plugin"; pluginId: string };
     admission: SessionAdmission;
   }): SessionConnection {
-    const { ws, clientId, appVersion, clientCapabilities, connectionLogger, lifecycle, admission } =
-      params;
+    const {
+      ws,
+      clientId,
+      appVersion,
+      clientCapabilities,
+      clientType,
+      connectionLogger,
+      lifecycle,
+      admission,
+    } = params;
     let connection: SessionConnection | null = null;
 
     const session = this.createSocketSession({
       clientId,
       appVersion,
       clientCapabilities,
+      clientType,
       permissions: admission.permissions,
       sourceId:
         lifecycle.kind === "ephemeral-plugin"
@@ -1578,6 +1596,7 @@ export class VoiceAssistantWebSocketServer {
       clientId: options.clientId,
       appVersion: options.appVersion,
       clientCapabilities: options.clientCapabilities,
+      clientType: options.clientType,
       permissions: options.permissions,
       onMessage: options.onMessage,
       onMessageToSource: options.onMessageToSource,
@@ -1651,6 +1670,7 @@ export class VoiceAssistantWebSocketServer {
         unregisterVoiceCallerContext: (agentId) => {
           this.voiceCallerContexts.delete(agentId);
         },
+        confirmDaemonAudioPlayed: (chunkId) => this.daemonSpeaker.confirmAudioPlayed(chunkId),
       },
       dictation:
         this.dictation || this.speech
@@ -1757,6 +1777,7 @@ export class VoiceAssistantWebSocketServer {
       clientId,
       appVersion: message.appVersion ?? null,
       clientCapabilities: message.capabilities ?? null,
+      clientType: message.clientType,
       connectionLogger,
       lifecycle: pluginId ? { kind: "ephemeral-plugin", pluginId } : { kind: "reconnectable" },
       admission: admitted,
@@ -2178,8 +2199,9 @@ export class VoiceAssistantWebSocketServer {
     });
   }
 
-  public resolveVoiceSpeakHandler(callerAgentId: string): VoiceSpeakHandler | null {
-    return this.voiceSpeakHandlers.get(callerAgentId) ?? null;
+  /** A voice session's own handler wins; every other agent speaks through the daemon. */
+  public resolveVoiceSpeakHandler(callerAgentId: string): VoiceSpeakHandler {
+    return this.voiceSpeakHandlers.get(callerAgentId) ?? this.daemonSpeaker.speak;
   }
 
   public resolveVoiceCallerContext(callerAgentId: string): VoiceCallerContext | null {

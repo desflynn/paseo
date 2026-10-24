@@ -430,6 +430,20 @@ export class SessionDelivery {
     return owner?.active === true && owner.source === source;
   }
 
+  /**
+   * A daemon-originated message for every attached source, outside any request. Modern
+   * sockets refuse messages nobody owns, so each source gets a one-shot owner for it. Proofs
+   * are keyed by message identity, so every source is sent its own copy.
+   */
+  broadcast(message: SessionOutboundMessage): void {
+    if (this.closing) return;
+    for (const source of this.sources.values()) {
+      if (!source.active) continue;
+      const copy = { ...(source.modern ? message : legacyMessage(message)) };
+      this.sendOwned({ source, active: true }, copy);
+    }
+  }
+
   private sendOwned(owner: DeliveryOwner, message: SessionOutboundMessage): void {
     const projected = this.project(owner.source.socket, message);
     this.proofs.set(projected, owner);
