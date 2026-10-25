@@ -2573,6 +2573,13 @@ export class PiRpcAgentClient implements AgentClient {
   private readonly runtimeSettings?: ProviderRuntimeSettings;
   private readonly runtime?: PiRuntime;
   private readonly usagePollScheduler?: PiUsagePollScheduler;
+  // The MCP probe spawns a throwaway pi process per launch just to list its slash
+  // commands. The answer is a property of the pi install and the project's
+  // extensions, not of the session, so cache it per (configured pi command, cwd)
+  // for this client's lifetime. A pi upgrade changes the configured command for
+  // versioned installs; a same-path upgrade re-probes after a daemon restart.
+  // Failed probes are not cached: spawn failures are usually transient.
+  private readonly mcpSupportProbes = new Map<string, Promise<PiMcpInjection["kind"] | null>>();
 
   constructor(options: PiRpcAgentClientOptions) {
     this.provider = PI_PROVIDER;
@@ -2874,7 +2881,23 @@ export class PiRpcAgentClient implements AgentClient {
     return null;
   }
 
-  private async detectMcpSupport(
+  private detectMcpSupport(
+    cwd: string,
+    env: Record<string, string> | undefined,
+    runtime: PiRuntime,
+  ): Promise<PiMcpInjection["kind"] | null> {
+    const key = `${this.runtimeSettings?.command ?? "pi"}\0${cwd}`;
+    const inFlight = this.mcpSupportProbes.get(key);
+    if (inFlight) return inFlight;
+    const probe = this.probeMcpSupport(cwd, env, runtime).then((support) => {
+      if (support == null) this.mcpSupportProbes.delete(key);
+      return support;
+    });
+    this.mcpSupportProbes.set(key, probe);
+    return probe;
+  }
+
+  private async probeMcpSupport(
     cwd: string,
     env: Record<string, string> | undefined,
     runtime: PiRuntime,
