@@ -153,6 +153,17 @@ function countCompletedRuns(schedule: StoredSchedule): number {
   return schedule.runs.filter((run) => run.status !== "running").length;
 }
 
+// A one-shot fire (this run consumes the last allowed run) must not be
+// discarded when the agent is mid-turn: it is steered — queued for when the
+// turn ends. Recurring schedules keep the discard so a heartbeat can never
+// double-deliver while a run is active.
+function shouldDiscardMidTurnFire(schedule: StoredSchedule, hasInFlightRun: boolean): boolean {
+  if (!hasInFlightRun) {
+    return false;
+  }
+  return schedule.maxRuns == null || schedule.maxRuns - countCompletedRuns(schedule) > 1;
+}
+
 function shouldArchiveScheduleRunWorkspace(input: {
   agentId: string | null;
   archiveOnFinish?: boolean;
@@ -942,7 +953,7 @@ export class ScheduleService {
         agentStorage: this.agentStorage,
         logger: this.logger,
       });
-      if (this.agentManager.hasInFlightRun(agent.id)) {
+      if (shouldDiscardMidTurnFire(schedule, this.agentManager.hasInFlightRun(agent.id))) {
         throw new Error(`Agent ${agent.id} already has an active run`);
       }
       await startAgentRun(this.agentManager, agent.id, wrappedPrompt, this.logger, {

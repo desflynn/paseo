@@ -756,6 +756,96 @@ describe("ScheduleService", () => {
     ]);
   });
 
+  test("delivers a one-shot schedule fired mid-turn instead of discarding it", async () => {
+    const manager = new AgentManager({
+      logger: createTestLogger(),
+      clients: createTestAgentClients(),
+      registry: agentStorage,
+    });
+    const agent = await manager.createAgent({ provider: "claude", cwd: tempDir }, undefined, {
+      workspaceId: undefined,
+    });
+    const steerOrReplace = vi.spyOn(manager, "steerOrReplaceActiveTurn");
+    const service = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: manager,
+      agentStorage,
+      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+      now: () => now,
+    });
+    vi.spyOn(manager, "hasInFlightRun").mockReturnValue(true);
+
+    const result = await (service as unknown as ScheduleServiceInternals).executeSchedule(
+      {
+        id: "schedule-oneshot",
+        name: null,
+        prompt: "Wake ping mid-turn",
+        cadence: { type: "every", everyMs: 60_000 },
+        target: { type: "agent", agentId: agent.id },
+        status: "active",
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        nextRunAt: now.toISOString(),
+        lastRunAt: null,
+        pausedAt: null,
+        expiresAt: null,
+        maxRuns: 1,
+        runs: [],
+      },
+      "run-1",
+    );
+
+    expect(result.agentId).toBe(agent.id);
+    expect(steerOrReplace).toHaveBeenCalledTimes(1);
+    expect(steerOrReplace.mock.calls[0]?.[0]).toBe(agent.id);
+    expect(steerOrReplace.mock.calls[0]?.[1]).toEqual(
+      expect.stringContaining(`Schedule fired (id=schedule-oneshot, run=run-1`),
+    );
+  });
+
+  test("still discards a recurring schedule fired mid-turn", async () => {
+    const manager = new AgentManager({
+      logger: createTestLogger(),
+      clients: createTestAgentClients(),
+      registry: agentStorage,
+    });
+    const service = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: manager,
+      agentStorage,
+      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+      now: () => now,
+    });
+    const agent = await manager.createAgent({ provider: "claude", cwd: tempDir }, undefined, {
+      workspaceId: undefined,
+    });
+    vi.spyOn(manager, "hasInFlightRun").mockReturnValue(true);
+
+    await expect(
+      (service as unknown as ScheduleServiceInternals).executeSchedule(
+        {
+          id: "schedule-recurring",
+          name: null,
+          prompt: "Recurring ping mid-turn",
+          cadence: { type: "every", everyMs: 60_000 },
+          target: { type: "agent", agentId: agent.id },
+          status: "active",
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+          nextRunAt: now.toISOString(),
+          lastRunAt: null,
+          pausedAt: null,
+          expiresAt: null,
+          maxRuns: null,
+          runs: [],
+        },
+        "run-1",
+      ),
+    ).rejects.toThrow(`Agent ${agent.id} already has an active run`);
+  });
+
   test("titles scheduled new agents from the schedule prompt", async () => {
     const manager = new AgentManager({
       logger: createTestLogger(),
