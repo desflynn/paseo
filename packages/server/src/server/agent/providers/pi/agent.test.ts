@@ -215,7 +215,7 @@ async function createSession(
   return { pi, session, events };
 }
 
-test("launches one MCP support probe per cwd across sessions", async () => {
+test("launches one MCP support probe across sessions", async () => {
   const pi = new FakePi();
   pi.queueCommands([{ name: "mcp", source: "extension", sourceInfo: { path: "builtin:mcp" } }]);
   const client = createClient(pi);
@@ -230,8 +230,9 @@ test("launches one MCP support probe per cwd across sessions", async () => {
   expect(pi.recordedLaunches).toHaveLength(3);
 });
 
-test("re-probes MCP support for a different cwd", async () => {
+test("does not re-probe MCP support for a different cwd", async () => {
   const pi = new FakePi();
+  pi.queueCommands([{ name: "mcp", source: "extension", sourceInfo: { path: "builtin:mcp" } }]);
   const client = createClient(pi);
   const servers = { probe: { type: "stdio" as const, command: "echo" } };
 
@@ -240,7 +241,7 @@ test("re-probes MCP support for a different cwd", async () => {
     createConfig({ cwd: "/tmp/paseo-pi-rpc-test-other", mcpServers: servers }),
   );
 
-  expect(pi.recordedLaunches).toHaveLength(4);
+  expect(pi.recordedLaunches).toHaveLength(3);
 });
 
 test("forwards launch-context env to the Pi process launch", async () => {

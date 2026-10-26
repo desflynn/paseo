@@ -166,6 +166,11 @@ export class JsonlRpcProcess {
         );
       });
       this.pending.set(id, { resolve, reject, timer });
+      this.requestSentAt.set(id, Date.now());
+      this.options.logger.debug(
+        { rpc: "send", type: command.type, id },
+        `${this.diagnosticName} rpc send`,
+      );
       this.send({ ...command, id });
     });
     return { id, promise };
@@ -267,6 +272,9 @@ export class JsonlRpcProcess {
     }
   }
 
+  /** o11 instrument: request send timestamps for rpc reply elapsed logging. */
+  private readonly requestSentAt = new Map<string, number>();
+
   private handleStdoutChunk(chunk: string): void {
     this.frameDecoder.write(chunk);
   }
@@ -296,6 +304,17 @@ export class JsonlRpcProcess {
       clearTimeout(pending.timer);
     }
     this.pending.delete(response.id);
+    const sentAt = this.requestSentAt.get(response.id);
+    this.requestSentAt.delete(response.id);
+    this.options.logger.debug(
+      {
+        rpc: "reply",
+        type: response.command,
+        id: response.id,
+        ...(sentAt === undefined ? {} : { elapsedMs: Date.now() - sentAt }),
+      },
+      `${this.diagnosticName} rpc reply`,
+    );
     if (!response.success) {
       pending.reject(
         new Error(

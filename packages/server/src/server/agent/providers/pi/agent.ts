@@ -2744,6 +2744,9 @@ export class PiRpcAgentClient implements AgentClient {
     return runtimeSession.getState();
   }
 
+  /** o11: catalog fetch cap; idle pi answers <1.5s, loaded <5s. Never uncapped. */
+  private readonly CATALOG_REQUEST_TIMEOUT_MS = 10_000;
+
   async fetchCatalog(
     options: FetchCatalogOptions,
     context?: ProviderRefreshContext,
@@ -2770,7 +2773,7 @@ export class PiRpcAgentClient implements AgentClient {
       if (!runtimeSession) throw new Error("Pi catalog runtime did not start");
       const catalogSession = runtimeSession;
       const piModels = await runProviderRefreshActivity(context, "get_available_models", () =>
-        catalogSession.getAvailableModels(null),
+        catalogSession.getAvailableModels(this.CATALOG_REQUEST_TIMEOUT_MS),
       );
       // A fresh Pi session starts on the model Pi resolves from its own settings.
       const { model: configuredModel } = await runProviderRefreshActivity(
@@ -2886,7 +2889,9 @@ export class PiRpcAgentClient implements AgentClient {
     env: Record<string, string> | undefined,
     runtime: PiRuntime,
   ): Promise<PiMcpInjection["kind"] | null> {
-    const key = `${this.runtimeSettings?.command ?? "pi"}\0${cwd}`;
+    // MCP support is a CLI capability, not a per-cwd fact: cache per command so a
+    // new workspace does not pay another full pi boot probe (o11).
+    const key = `${this.runtimeSettings?.command ?? "pi"}`;
     const inFlight = this.mcpSupportProbes.get(key);
     if (inFlight) return inFlight;
     const probe = this.probeMcpSupport(cwd, env, runtime).then((support) => {
@@ -2902,6 +2907,7 @@ export class PiRpcAgentClient implements AgentClient {
     env: Record<string, string> | undefined,
     runtime: PiRuntime,
   ): Promise<PiMcpInjection["kind"] | null> {
+    this.logger.debug({ cwd, envKeys: Object.keys(env ?? {}).sort() }, "Pi MCP probe spawning");
     const runtimeSession = await runtime.startSession({ cwd, env }).catch((error) => {
       this.logger.debug({ err: error, cwd }, "Pi MCP probe failed to start");
       return null;
@@ -2911,6 +2917,7 @@ export class PiRpcAgentClient implements AgentClient {
     }
     try {
       const commands = await runtimeSession.getCommands();
+      this.logger.debug({ cwd, commandCount: commands.length }, "Pi MCP probe resolved");
       if (commands.some(isPiMcpAdapterCommand)) {
         return "adapter";
       }
