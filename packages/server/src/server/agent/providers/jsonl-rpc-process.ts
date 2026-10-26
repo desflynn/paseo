@@ -236,16 +236,29 @@ export class JsonlRpcProcess {
     } catch {
       // Ignore cleanup races.
     }
+    const terminateStartedAt = Date.now();
+    this.options.logger.debug(
+      { pid: this.child.pid, argv: this.child.spawnargs },
+      `${this.diagnosticName} termination starting`,
+    );
     const result = await terminateWithTreeKill(this.child, {
       gracefulTimeoutMs: GRACEFUL_SHUTDOWN_TIMEOUT_MS,
       forceTimeoutMs: FORCE_SHUTDOWN_TIMEOUT_MS,
       onForceSignal: () => {
         this.options.logger.warn(
-          { timeoutMs: GRACEFUL_SHUTDOWN_TIMEOUT_MS },
+          {
+            timeoutMs: GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+            pid: this.child.pid,
+            elapsedMs: Date.now() - terminateStartedAt,
+          },
           `${this.diagnosticName} process did not exit after SIGTERM; sending SIGKILL`,
         );
       },
     });
+    this.options.logger.debug(
+      { pid: this.child.pid, result, elapsedMs: Date.now() - terminateStartedAt },
+      `${this.diagnosticName} termination finished`,
+    );
     if (result === "kill-timeout") {
       this.options.logger.warn(
         { timeoutMs: FORCE_SHUTDOWN_TIMEOUT_MS },
