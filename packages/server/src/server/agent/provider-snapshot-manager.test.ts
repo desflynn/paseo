@@ -3773,3 +3773,56 @@ test("model overrides preserve negotiated plugin capabilities and connection shu
     manager.destroy();
   }
 });
+
+test("resolveCreateConfig with wait false does not block on catalog discovery (o11)", async () => {
+  let releaseCatalog: () => void = () => {};
+  const catalogGate = new Promise<void>((resolveGate) => {
+    releaseCatalog = resolveGate;
+  });
+  const resolverInputs: ResolveAgentCreateConfigInput[] = [];
+  const manager = new ProviderSnapshotManager({
+    logger: createTestLogger(),
+    providerOverrides: {
+      copilot: { enabled: false },
+      opencode: { enabled: false },
+      pi: { enabled: false },
+      claude: { enabled: false },
+    },
+    extraClients: {
+      codex: createExtraClient("codex", {
+        async isAvailable() {
+          return true;
+        },
+        async fetchCatalog() {
+          await catalogGate;
+          return { models: [] as AgentModelDefinition[], modes: [] as AgentMode[] };
+        },
+        resolveCreateConfig(input) {
+          resolverInputs.push(input);
+          return { modeId: undefined, featureValues: undefined };
+        },
+      }),
+    },
+  });
+  try {
+    const startedAt = Date.now();
+    const resolved = await manager.resolveCreateConfig({
+      cwd: "/tmp/project",
+      provider: "codex",
+      requestedMode: undefined,
+      featureValues: undefined,
+      parent: null,
+      unattended: false,
+      wait: false,
+    });
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(resolverInputs).toHaveLength(1);
+    expect(resolverInputs[0]?.availableModes).toEqual([]);
+    expect(resolved).toEqual({ modeId: undefined, featureValues: undefined });
+  } finally {
+    releaseCatalog();
+    await manager.shutdown().catch(() => undefined);
+    manager.destroy();
+  }
+}, 10_000);

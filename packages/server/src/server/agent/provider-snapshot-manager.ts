@@ -163,6 +163,12 @@ export interface ResolveProviderCreateConfigOptions {
   featureValues: Record<string, unknown> | undefined;
   parent: ManagedAgent | null;
   unattended: boolean;
+  /**
+   * False serves the current catalog entry without waiting for discovery and
+   * heals it in the background. Agent creation passes false so a hung provider
+   * probe cannot stall the launch (o11).
+   */
+  wait?: boolean;
 }
 
 export interface ResolvedProviderCreateConfig {
@@ -553,11 +559,14 @@ export class ProviderSnapshotManager {
   async resolveCreateConfig(
     input: ResolveProviderCreateConfigOptions,
   ): Promise<ResolvedProviderCreateConfig> {
-    const entry = await this.getReadyProvider({
-      cwd: input.cwd,
-      provider: input.provider,
-      wait: true,
-    });
+    const entry =
+      input.wait === false
+        ? await this.getProviderWithoutBlockingDiscovery(input)
+        : await this.getReadyProvider({
+            cwd: input.cwd,
+            provider: input.provider,
+            wait: true,
+          });
     const definition = this.requireProvider(input.provider);
     const parent = input.parent ? this.resolveParent(input.parent) : null;
     return definition.resolveCreateConfig({
@@ -568,6 +577,32 @@ export class ProviderSnapshotManager {
       unattended: input.unattended || parent?.isUnattended === true,
       availableModes: entry.modes ?? [],
     });
+  }
+
+  /**
+   * Agent creation must not wait for catalog discovery: a hung provider probe
+   * stalls every launch while the fallback chain runs (o11). Serve the current
+   * entry and heal in the background; a disabled provider is a config fact
+   * and still throws.
+   */
+  private async getProviderWithoutBlockingDiscovery(
+    input: ResolveProviderCreateConfigOptions,
+  ): Promise<ProviderSnapshotEntry> {
+    const entry = await this.getProvider({
+      cwd: input.cwd,
+      provider: input.provider,
+      wait: false,
+    });
+    if (!entry.enabled) {
+      throw new Error(`Provider '${entry.provider}' is disabled`);
+    }
+    if (entry.status !== "ready") {
+      void this.warmUpSnapshotForCwd({
+        cwd: input.cwd ?? undefined,
+        providers: [input.provider],
+      }).catch(() => undefined);
+    }
+    return entry;
   }
 
   async getProviderDiagnostic(provider: AgentProvider): Promise<ProviderDiagnosticResult> {

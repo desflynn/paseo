@@ -226,6 +226,7 @@ async function resolveSessionCreateAgent(
     featureValues: builtSessionConfig.featureValues,
     parent: null,
     unattended: false,
+    wait: false,
   });
   const sessionConfig: AgentSessionConfig = {
     ...builtSessionConfig,
@@ -370,6 +371,7 @@ async function resolveMcpProviderCreateConfig(params: {
     featureValues: params.input.features ?? passthroughConfig?.featureValues,
     parent: params.parentAgent,
     unattended: params.input.unattended ?? false,
+    wait: false,
   });
 }
 
