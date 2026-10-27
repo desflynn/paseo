@@ -3826,3 +3826,48 @@ test("resolveCreateConfig with wait false does not block on catalog discovery (o
     manager.destroy();
   }
 }, 10_000);
+
+test("defers the background catalog heal so the agent session boots first (o11)", async () => {
+  vi.useFakeTimers();
+  const warmUpCalls: Array<{ cwd?: string; providers?: string[] }> = [];
+  const manager = new ProviderSnapshotManager({
+    logger: createTestLogger(),
+    providerOverrides: {
+      copilot: { enabled: false },
+      opencode: { enabled: false },
+      pi: { enabled: false },
+      claude: { enabled: false },
+    },
+    extraClients: {
+      codex: createExtraClient("codex", {
+        async isAvailable() {
+          return true;
+        },
+      }),
+    },
+  });
+  const originalWarmUp = manager.warmUpSnapshotForCwd.bind(manager);
+  manager.warmUpSnapshotForCwd = (options) => {
+    warmUpCalls.push({ cwd: options.cwd, providers: options.providers });
+    return originalWarmUp(options);
+  };
+  try {
+    await manager.resolveCreateConfig({
+      cwd: "/tmp/project",
+      provider: "codex",
+      requestedMode: undefined,
+      featureValues: undefined,
+      parent: null,
+      unattended: false,
+      wait: false,
+    });
+    expect(warmUpCalls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(warmUpCalls).toHaveLength(1);
+    expect(warmUpCalls[0]?.providers).toEqual(["codex"]);
+  } finally {
+    vi.useRealTimers();
+    await manager.shutdown().catch(() => undefined);
+    manager.destroy();
+  }
+});

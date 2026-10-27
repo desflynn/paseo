@@ -597,10 +597,15 @@ export class ProviderSnapshotManager {
       throw new Error(`Provider '${entry.provider}' is disabled`);
     }
     if (entry.status !== "ready") {
-      void this.warmUpSnapshotForCwd({
-        cwd: input.cwd ?? undefined,
-        providers: [input.provider],
-      }).catch(() => undefined);
+      // Heal in the background, but let the agent's own session boot first: a
+      // catalog probe spawned alongside it contends for CPU on a loaded box and
+      // stretches the launch the heal exists to protect (o11).
+      setTimeout(() => {
+        void this.warmUpSnapshotForCwd({
+          cwd: input.cwd ?? undefined,
+          providers: [input.provider],
+        }).catch(() => undefined);
+      }, CATALOG_HEAL_DELAY_MS).unref?.();
     }
     return entry;
   }
@@ -1264,3 +1269,7 @@ export function sameSnapshotRecords(
     })
   );
 }
+
+/** o11: how long a non-blocking create waits before healing the catalog, so the
+ * agent's own session boot is not contended by a catalog probe. */
+const CATALOG_HEAL_DELAY_MS = 5_000;
