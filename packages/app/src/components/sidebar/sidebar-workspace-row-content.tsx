@@ -199,19 +199,21 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
     <View style={styles.workspaceRowContent}>
       <View style={styles.workspaceRowMain}>
         {renderLeadingVisual()}
-        {leadingProjectName ? (
-          <ProjectStatusIndicator
-            iconDataUri={leadingProjectIconDataUri}
-            displayName={leadingProjectName}
-            projectViewKey={workspace.projectViewKey}
-            statusBucket={workspace.statusBucket}
-            backdrop={backdrop}
-            loading={isLoading}
-            testID={`sidebar-row-project-icon-${workspace.workspaceKey}`}
-          />
-        ) : null}
         <View style={styles.workspaceContentColumn}>
           <View style={styles.workspaceTitleRow}>
+            {leadingProjectName ? (
+              <View style={styles.repoVisualSlot}>
+                <ProjectStatusIndicator
+                  iconDataUri={leadingProjectIconDataUri}
+                  displayName={leadingProjectName}
+                  projectViewKey={workspace.projectViewKey}
+                  statusBucket={workspace.statusBucket}
+                  backdrop={backdrop}
+                  loading={isLoading}
+                  testID={`sidebar-row-project-icon-${workspace.workspaceKey}`}
+                />
+              </View>
+            ) : null}
             <Text style={workspaceBranchTextStyle} numberOfLines={1}>
               {workspaceLabel}
             </Text>
@@ -577,6 +579,14 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+  },
+  // The repo icon rides at the start of the name line so the detail line below starts at the
+  // icon's LEFT edge — the artefact aligns the machine indicator with the repo icon, not with
+  // the name. Fixed width keeps every row's name on the same rail.
+  repoVisualSlot: {
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
   },
   // The title owns the first line outright now that the host, change request and CI moved
   // to the meta row, so it takes the full width the trailing slot leaves behind.
