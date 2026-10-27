@@ -8,8 +8,8 @@ import type { WorkspaceServiceSummary } from "./service-summary";
 /**
  * What ends up on the line under a workspace title, in the order it is read: where the
  * workspace lives, what change it belongs to, whether that change is passing, what it is
- * running, and what someone filed it under. Identity first, then the work, then the work's
- * state, then the labels a person put on it.
+ * running, and what someone filed it under. The host leads so the machine reads before the
+ * work, then the branch, then the work's state, then the labels a person put on it.
  *
  * Labels are one item rather than one per label: they are drawn as a run of chips with a single
  * separator in front of them, so the line reads as four peers however many labels a workspace
@@ -56,14 +56,14 @@ export function selectMetaRowItems(input: {
   } = input;
   const items: MetaRowItem[] = [];
 
+  if (hasHostBadge) {
+    items.push({ kind: "host" });
+  }
   if (currentBranch && visible.branch) {
     items.push({ kind: "branch", name: currentBranch });
   }
   if (projectName && visible.project) {
     items.push({ kind: "project", name: projectName });
-  }
-  if (hasHostBadge) {
-    items.push({ kind: "host" });
   }
   if (prHint && visible.changeRequest) {
     items.push({ kind: "changeRequest", hint: prHint });

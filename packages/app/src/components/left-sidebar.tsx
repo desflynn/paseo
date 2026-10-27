@@ -36,7 +36,6 @@ import { SidebarFooterIconHighlight } from "@/components/sidebar/sidebar-footer-
 import { SidebarHelpMenu } from "@/components/sidebar/sidebar-help-menu";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { DensityIcon } from "@/components/ui/density-icon";
-import { SidebarSectionHeader } from "@/components/sidebar/sidebar-section-header";
 import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
@@ -428,7 +427,8 @@ function SidebarFooter({
   const newAgentKeys = useShortcutKeys("new-agent");
   const settingsKeys = useShortcutKeys("toggle-settings");
 
-  // One line of icons: Add project, Usage, Hosts, then Help and Settings at the end.
+  // One line of icons: Add project, Usage, Hosts on the left; display preferences, Help and
+  // Settings on the right. The Workspaces view control moved here from the section heading.
   return (
     <UsageSidebarRoot>
       <View style={styles.footerContainer} testID="sidebar-footer">
@@ -448,6 +448,16 @@ function SidebarFooter({
             onOpenHostSettings={handleOpenHostSettings}
           />
           <View style={styles.footerSpacer} />
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <View>
+                <SidebarDisplayPreferencesMenu />
+              </View>
+            </TooltipTrigger>
+            <TooltipContent side="top" align="center" offset={8}>
+              <IconTooltipContent label="Display preferences" />
+            </TooltipContent>
+          </Tooltip>
           <SidebarHelpMenu />
           <FooterIconButton
             onPress={handleSettings}
@@ -601,7 +611,6 @@ function MobileSidebar({
             onImportSession={handleImportSession}
             parentGestureRef={closeGestureRef}
             dragGestureHostActive={active}
-            listHeaderComponent={workspacesSectionHeaderElement}
           />
         )}
 
@@ -780,7 +789,6 @@ function DesktopSidebar({
             onRefresh={handleRefresh}
             onAddProject={handleOpenProject}
             onImportSession={handleImportSession}
-            listHeaderComponent={workspacesSectionHeaderElement}
           />
         )}
 
@@ -805,26 +813,8 @@ function DesktopSidebar({
   );
 }
 
-function WorkspacesSectionHeader() {
-  return (
-    <SidebarSectionHeader title="Workspaces">
-      <Tooltip delayDuration={300}>
-        <TooltipTrigger asChild>
-          <View>
-            <SidebarDisplayPreferencesMenu />
-          </View>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" align="center" offset={8}>
-          <IconTooltipContent label="Display preferences" />
-        </TooltipContent>
-      </Tooltip>
-    </SidebarSectionHeader>
-  );
-}
-
-// Stable element so the sidebar list's listHeaderComponent prop keeps identity across
-// renders (WorkspacesSectionHeader takes no props).
-const workspacesSectionHeaderElement = <WorkspacesSectionHeader />;
+// The Workspaces section heading is gone from the overlay: the display preferences control
+// it carried now lives in the sidebar footer, beside Help and Settings.
 
 // Static styles for Animated.Views — must NOT use Unistyles dynamic theme to
 // avoid the "Unable to find node on an unmounted component" crash when Unistyles

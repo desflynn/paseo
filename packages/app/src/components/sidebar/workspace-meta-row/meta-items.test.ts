@@ -35,12 +35,12 @@ function select(overrides: Partial<Parameters<typeof selectMetaRowItems>[0]> = {
 const kinds = (items: ReturnType<typeof selectMetaRowItems>) => items.map((item) => item.kind);
 
 describe("selectMetaRowItems", () => {
-  it("puts the enabled branch and project badges first", () => {
+  it("puts the host first, then the branch, then the rest", () => {
     const visible = { ...DEFAULT_SIDEBAR_ROW_ITEMS, branch: true, project: true };
     expect(kinds(select({ visible }))).toEqual([
+      "host",
       "branch",
       "project",
-      "host",
       "changeRequest",
       "checks",
       "services",
@@ -76,6 +76,12 @@ describe("selectMetaRowItems", () => {
       "services",
       "labels",
     ]);
+  });
+
+  it("keeps the host first even when the branch is the only other identity item", () => {
+    expect(
+      kinds(select({ projectName: null, visible: { ...DEFAULT_SIDEBAR_ROW_ITEMS, branch: true } })),
+    ).toEqual(["host", "branch", "changeRequest", "checks", "services", "labels"]);
   });
 
   it("carries every label as one item, so the line keeps one separator however many there are", () => {
