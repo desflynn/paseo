@@ -183,7 +183,11 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
         </View>
       );
     }
-    if (leadingProjectName) {
+    // Active rows carry their status glyph whatever grouping put them there — hoisted under a
+    // project or flat in a status group, the leading slot is the row's state, one glyph per
+    // agent. Only done rows keep the project icon: no status to report, and the spec keeps
+    // the repo icon on their reclaimed line.
+    if (leadingProjectName && workspace.statusBucket === "done" && !isLoading) {
       return (
         <ProjectStatusIndicator
           iconDataUri={leadingProjectIconDataUri}
