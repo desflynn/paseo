@@ -41,7 +41,10 @@ export class OpenAITTS implements TextToSpeechProvider {
     return this.config;
   }
 
-  public async synthesizeSpeech(text: string): Promise<SpeechStreamResult> {
+  public async synthesizeSpeech(
+    text: string,
+    options?: { voice?: string },
+  ): Promise<SpeechStreamResult> {
     if (!text || text.trim().length === 0) {
       throw new Error("Cannot synthesize empty text");
     }
@@ -56,7 +59,7 @@ export class OpenAITTS implements TextToSpeechProvider {
 
       const response = await this.openaiClient.audio.speech.create({
         model: this.config.model!,
-        voice: this.config.voice!,
+        voice: options?.voice ?? this.config.voice!,
         input: text,
         response_format: this.config.responseFormat as
           | "mp3"

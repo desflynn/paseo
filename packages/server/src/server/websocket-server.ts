@@ -79,7 +79,12 @@ import {
 import type { ScriptHealthState } from "./script-health-monitor.js";
 import type { ServiceProxySubsystem } from "./service-proxy.js";
 import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
-import { createDaemonSpeaker, type DaemonSpeaker } from "./speech/daemon-speaker.js";
+import {
+  createDaemonSpeaker,
+  resolveWorkspaceVoice,
+  type DaemonSpeaker,
+} from "./speech/daemon-speaker.js";
+import { loadPersistedConfig } from "./persisted-config.js";
 import type { SpeechReadinessSnapshot, SpeechService } from "./speech/speech-runtime.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "./voice-types.js";
 import {
@@ -696,6 +701,11 @@ export class VoiceAssistantWebSocketServer {
     this.daemonSpeaker = createDaemonSpeaker({
       logger: this.logger,
       resolveTts: () => this.speech?.resolveTts() ?? null,
+      resolveVoice: (callerAgentId) =>
+        resolveWorkspaceVoice(
+          loadPersistedConfig(paseoHome, this.logger).features?.voiceMode?.tts?.workspaceVoices,
+          agentManager.getAgent(callerAgentId),
+        ),
       listSessions: () => this.listSessions(),
     });
     this.workspaceSetupRuntime = workspaceSetupRuntime;

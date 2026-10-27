@@ -181,6 +181,7 @@ export class TTSManager {
     abortSignal: AbortSignal,
     isVoiceMode: boolean,
     singleClip = false,
+    voice?: string,
   ): Promise<void> {
     const ttsStartMs = Date.now();
     this.logger.info(
@@ -211,7 +212,7 @@ export class TTSManager {
     const scheduleNextSegments = () => {
       while (nextSegmentToSchedule < segments.length && inflight.size < TTS_PREFETCH_SEGMENTS) {
         const segment = segments[nextSegmentToSchedule];
-        inflight.set(segment.index, this.scheduleSegmentSynthesis(segment, abortSignal));
+        inflight.set(segment.index, this.scheduleSegmentSynthesis(segment, abortSignal, voice));
         nextSegmentToSchedule += 1;
       }
     };
@@ -299,6 +300,7 @@ export class TTSManager {
   private async synthesizeSegment(
     segment: TtsSegment,
     abortSignal: AbortSignal,
+    voice?: string,
   ): Promise<PreparedTtsSegment> {
     const resolveStart = Date.now();
     const tts = this.resolveTts();
@@ -312,7 +314,10 @@ export class TTSManager {
     }
 
     const synthStart = Date.now();
-    const { stream, format } = await tts.synthesizeSpeech(segment.text);
+    const { stream, format } = await tts.synthesizeSpeech(
+      segment.text,
+      voice ? { voice } : undefined,
+    );
     this.logger.info(
       {
         segmentIndex: segment.index,
@@ -338,8 +343,9 @@ export class TTSManager {
   private scheduleSegmentSynthesis(
     segment: TtsSegment,
     abortSignal: AbortSignal,
+    voice?: string,
   ): Promise<PreparedSegmentResult> {
-    return this.synthesizeSegment(segment, abortSignal).then(
+    return this.synthesizeSegment(segment, abortSignal, voice).then(
       (prepared) => {
         if (abortSignal.aborted) {
           this.destroySpeechStream(prepared.stream);

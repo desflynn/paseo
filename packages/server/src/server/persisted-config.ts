@@ -146,6 +146,7 @@ const FeatureVoiceModeSchema = z
         model: z.string().min(1).optional(),
         // Free-form: self-hosted OpenAI-compatible servers expose their own voice names.
         voice: z.string().trim().min(1).optional(),
+        workspaceVoices: z.record(z.string(), z.string().trim().min(1)).optional(),
         speakerId: z.number().int().optional(),
         speed: z.number().optional(),
       })

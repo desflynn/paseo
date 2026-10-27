@@ -3,7 +3,7 @@ import pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SessionOutboundMessage } from "../messages.js";
-import { createDaemonSpeaker } from "./daemon-speaker.js";
+import { createDaemonSpeaker, resolveWorkspaceVoice } from "./daemon-speaker.js";
 import type { TextToSpeechProvider } from "./speech-provider.js";
 
 const tts: TextToSpeechProvider = {
@@ -44,7 +44,50 @@ function createSpeaker(options: {
   });
 }
 
+describe("workspace voice selection", () => {
+  it("maps top-level workspaces, defaults children and preserves the global path without a map", () => {
+    const map = { "wks-joey": "bm_lewis", "wks-zoe": "af_aoede" };
+    expect(
+      resolveWorkspaceVoice(undefined, { workspaceId: "wks-joey", labels: {} }),
+    ).toBeUndefined();
+    expect(resolveWorkspaceVoice(map, { workspaceId: "wks-joey", labels: {} })).toBe("bm_lewis");
+    expect(resolveWorkspaceVoice(map, { workspaceId: "wks-zoe", labels: {} })).toBe("af_aoede");
+    expect(
+      resolveWorkspaceVoice(map, {
+        workspaceId: "wks-joey",
+        labels: { "paseo.parent-agent-id": "parent" },
+      }),
+    ).toBe("bf_lily");
+    expect(resolveWorkspaceVoice(map, null)).toBe("bf_lily");
+  });
+});
+
 describe("createDaemonSpeaker", () => {
+  it("selects a voice per caller without changing the shared provider", async () => {
+    const { received, sessions } = createClients(1);
+    const synthesizeSpeech = vi.fn(async (_text: string, _options?: { voice?: string }) => ({
+      stream: Readable.from([Buffer.from("audio")]),
+      format: "pcm;rate=24000",
+    }));
+    const speaker = createDaemonSpeaker({
+      logger: pino({ level: "silent" }),
+      resolveTts: () => ({ synthesizeSpeech }),
+      listSessions: () => sessions,
+      resolveVoice: (id: string) => (id === "joey" ? "bm_lewis" : "af_aoede"),
+    });
+    const first = speaker.speak({ text: "Hello.", callerAgentId: "joey" });
+    const second = speaker.speak({ text: "Hello.", callerAgentId: "zoe" });
+    await vi.waitFor(() => expect(received[0]).toHaveLength(2));
+    for (const message of received[0]) {
+      if (message.type === "audio_output") speaker.confirmAudioPlayed(message.payload.id);
+    }
+    await Promise.all([first, second]);
+    expect(synthesizeSpeech.mock.calls.map((call) => call[1]?.voice).sort()).toEqual([
+      "af_aoede",
+      "bm_lewis",
+    ]);
+  });
+
   it("plays on the most recently active app client only and resolves on its confirmation", async () => {
     const { received, sessions } = createClients(2);
     const speaker = createSpeaker({ sessions });

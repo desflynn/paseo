@@ -5,6 +5,15 @@ import type { SessionOutboundMessage } from "../messages.js";
 import type { VoiceSpeakHandler } from "../voice-types.js";
 import type { TextToSpeechProvider } from "./speech-provider.js";
 
+export function resolveWorkspaceVoice(
+  voices: Record<string, string> | undefined,
+  agent: { workspaceId?: string; labels: Record<string, string> } | null,
+): string | undefined {
+  if (!voices) return undefined;
+  if (!agent || agent.labels["paseo.parent-agent-id"] || !agent.workspaceId) return "bf_lily";
+  return voices[agent.workspaceId] ?? "bf_lily";
+}
+
 // A 4000 character report plays for about five minutes; leave room for synthesis.
 const DEFAULT_PLAYBACK_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -59,6 +68,7 @@ export function createDaemonSpeaker(options: {
   resolveTts: () => TextToSpeechProvider | null;
   listSessions: () => DaemonSpeakerSession[];
   playbackTimeoutMs?: number;
+  resolveVoice?: (callerAgentId: string) => string | undefined;
 }): DaemonSpeaker {
   const { logger, resolveTts, listSessions } = options;
   const playbackTimeoutMs = options.playbackTimeoutMs ?? DEFAULT_PLAYBACK_TIMEOUT_MS;
@@ -95,6 +105,7 @@ export function createDaemonSpeaker(options: {
       // One clip for the whole report: a gap between sentence clips lets a car's Bluetooth
       // drop to the radio and clips the first words of the next sentence.
       true,
+      options.resolveVoice?.(callerAgentId),
     );
     if (timeout.aborted && !signal?.aborted) {
       throw new Error("No app client confirmed playback");
