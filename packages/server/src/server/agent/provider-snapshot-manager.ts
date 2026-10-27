@@ -528,8 +528,16 @@ export class ProviderSnapshotManager {
   }
 
   async listModels(input: ProviderSnapshotProviderOptions): Promise<AgentModelDefinition[]> {
-    const entry = await this.getReadyProvider(input);
-    return filterSelectableAgentModels(entry.models);
+    // o11: the model picker must never wait on live provider discovery — a
+    // cold cwd made that wait a fresh probe, and the catalog cap turned the
+    // wait into a hard error that killed the picker. Serve what the snapshot
+    // holds (a pending entry carries the models configured in config.json)
+    // and let the background heal refresh it.
+    const entry = await this.getProvider({ ...input, wait: false });
+    if (!entry.enabled) {
+      throw new Error(`Provider '${entry.provider}' is disabled`);
+    }
+    return filterSelectableAgentModels(entry.models ?? []);
   }
 
   async listModes(input: ProviderSnapshotProviderOptions): Promise<AgentMode[]> {
@@ -546,7 +554,6 @@ export class ProviderSnapshotManager {
       const models = await this.listModels({
         provider: input.provider,
         cwd: input.cwd ? expandTilde(input.cwd) : undefined,
-        wait: true,
       });
       const preferred = models.find((model) => model.isDefault) ?? models[0];
       return preferred?.id;

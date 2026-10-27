@@ -939,10 +939,12 @@ describe("ProviderSnapshotManager public surface", () => {
       extraClients: { codex: client },
     });
     try {
+      // Prime the snapshot to ready first: listModels serves the current
+      // entry and never waits on discovery (o11 picker fix).
+      await manager.getProvider({ cwd: "/tmp/project", provider: "codex", wait: true });
       const models = await manager.listModels({
         cwd: "/tmp/project",
         provider: "codex",
-        wait: true,
       });
       expect(models.map((model) => model.id)).toEqual(["gpt-5.4"]);
     } finally {
@@ -3869,5 +3871,57 @@ test("defers the background catalog heal so the agent session boots first (o11)"
     vi.useRealTimers();
     await manager.shutdown().catch(() => undefined);
     manager.destroy();
+  }
+});
+
+test("model listing never waits on provider discovery (o11 picker)", async () => {
+  vi.useFakeTimers();
+  const neverReturnsCatalog = (_options: FetchCatalogOptions, context?: ProviderRefreshContext) =>
+    new Promise<never>((_resolve, reject) => {
+      context?.signal.addEventListener("abort", () => reject(context.signal.reason), {
+        once: true,
+      });
+    });
+  const manager = new ProviderSnapshotManager({
+    logger: createTestLogger(),
+    refreshTimeoutMs: 30_000,
+    extraClients: {
+      codex: createExtraClient("codex", {
+        isAvailable: async () => true,
+        fetchCatalog: neverReturnsCatalog,
+      }),
+    },
+  });
+  try {
+    // Prime the provider so a snapshot entry exists in loading state.
+    void manager.getProvider({ cwd: "/tmp/project", provider: "codex", wait: true });
+    await vi.advanceTimersByTimeAsync(10);
+
+    // The picker read must settle without advancing past the refresh timeout.
+    let modelsSettled = false;
+    const modelsPromise = manager
+      .listModels({ cwd: "/tmp/project", provider: "codex", wait: true })
+      .then((models) => {
+        modelsSettled = true;
+        return models;
+      });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(modelsSettled).toBe(true);
+    await expect(modelsPromise).resolves.toEqual([]);
+
+    // The default-model resolution used by the create form is equally unblocked.
+    let defaultSettled = false;
+    const defaultPromise = manager
+      .resolveDefaultModel({ provider: "codex", cwd: "/tmp/project" })
+      .then((model) => {
+        defaultSettled = true;
+        return model;
+      });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(defaultSettled).toBe(true);
+    await expect(defaultPromise).resolves.toBeUndefined();
+  } finally {
+    manager.destroy();
+    vi.useRealTimers();
   }
 });
