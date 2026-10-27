@@ -2,6 +2,7 @@ import type pino from "pino";
 import type { Readable } from "node:stream";
 import { v4 as uuidv4 } from "uuid";
 import type { TextToSpeechProvider } from "../speech/speech-provider.js";
+import { pcmSegmentBytes } from "../speech/audio.js";
 import { toResolver, type Resolvable } from "../speech/provider-resolver.js";
 import type { SessionOutboundMessage } from "../messages.js";
 
@@ -442,12 +443,12 @@ export class TTSManager {
       }
       if (abortSignal.aborted || buffers.length === 0) return;
 
+      const collected = Buffer.concat(buffers);
+      const normalized = pcmSegmentBytes(collected, prepared.format);
       const chunkIndex = group.nextChunkIndex;
       group.nextChunkIndex += 1;
       group.pending.pendingChunks += 1;
-      if (chunkIndex === 0) {
-        buffers.unshift(leadInSilence(prepared.format));
-      }
+      const leadIn = chunkIndex === 0 ? leadInSilence(normalized.format) : Buffer.alloc(0);
       emitMessage({
         type: "audio_output",
         payload: {
@@ -455,8 +456,8 @@ export class TTSManager {
           groupId: group.audioId,
           chunkIndex,
           isLastChunk: isLast,
-          audio: Buffer.concat(buffers).toString("base64"),
-          format: prepared.format,
+          audio: Buffer.concat([leadIn, normalized.bytes]).toString("base64"),
+          format: normalized.format,
           isVoiceMode,
         },
       });
@@ -525,7 +526,7 @@ export class TTSManager {
       }
 
       if (!abortSignal.aborted && buffers.length > 0) {
-        const fullBuffer = Buffer.concat(buffers);
+        const normalized = pcmSegmentBytes(Buffer.concat(buffers), format);
         const chunkId = `${audioId}:0`;
         pendingPlayback.pendingChunks = 1;
 
@@ -536,8 +537,8 @@ export class TTSManager {
             groupId: audioId,
             chunkIndex: 0,
             isLastChunk: true,
-            audio: fullBuffer.toString("base64"),
-            format,
+            audio: normalized.bytes.toString("base64"),
+            format: normalized.format,
             isVoiceMode,
           },
         });

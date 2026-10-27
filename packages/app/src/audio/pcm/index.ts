@@ -122,3 +122,24 @@ export function playPcm16(
     }
   });
 }
+
+/** Convert 16-bit little-endian mono PCM into a Web Audio buffer at the given rate. */
+export function pcm16LeToAudioBuffer(
+  context: AudioContext,
+  bytes: Uint8Array,
+  sampleRate: number,
+): AudioBuffer {
+  const sampleCount = Math.floor(bytes.length / 2);
+  const audioBuffer = context.createBuffer(1, sampleCount, sampleRate);
+  const channel = audioBuffer.getChannelData(0);
+  for (let i = 0; i < sampleCount; i += 1) {
+    const lo = bytes[i * 2];
+    const hi = bytes[i * 2 + 1];
+    let value = (hi << 8) | lo;
+    if (value & 0x8000) {
+      value -= 0x10000;
+    }
+    channel[i] = value / 0x8000;
+  }
+  return audioBuffer;
+}

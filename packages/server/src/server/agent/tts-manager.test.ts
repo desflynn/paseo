@@ -118,6 +118,87 @@ describe("TTSManager", () => {
     expect(plain.toString()).toBe("ab");
   });
 
+  it("strips a WAV header from pcm-labelled segments answered by an OpenAI-compatible shim", async () => {
+    // The packed Kokoro service honours response_format=pcm, but a shim that ignores it
+    // answers every synthesis with a complete WAV. Segments must not carry the header
+    // into the clip, and the format label must gain the WAV's sample rate.
+    const pcm = Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+    const wav = Buffer.alloc(44 + pcm.length);
+    wav.write("RIFF", 0, "ascii");
+    wav.writeUInt32LE(36 + pcm.length, 4);
+    wav.write("WAVE", 8, "ascii");
+    wav.write("fmt ", 12, "ascii");
+    wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20);
+    wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(24000, 24);
+    wav.writeUInt32LE(48000, 28);
+    wav.writeUInt16LE(2, 32);
+    wav.writeUInt16LE(16, 34);
+    wav.write("data", 36, "ascii");
+    wav.writeUInt32LE(pcm.length, 40);
+    pcm.copy(wav, 44);
+
+    const tts: TextToSpeechProvider = {
+      async synthesizeSpeech(): Promise<{ stream: Readable; format: string }> {
+        return { stream: Readable.from([wav]), format: "pcm" };
+      },
+    };
+    const manager = new TTSManager("s1", pino({ level: "silent" }), tts);
+    const abort = new AbortController();
+    const emitted: AudioOutputMessage[] = [];
+
+    await manager.generateAndWaitForPlayback(
+      "First sentence. Second sentence.",
+      (msg) => {
+        if (isAudioOutputMessage(msg)) {
+          emitted.push(msg);
+          manager.confirmAudioPlayed(msg.payload.id);
+        }
+      },
+      abort.signal,
+      false,
+      true,
+    );
+
+    expect(emitted.map((m) => m.payload.format)).toEqual(["pcm;rate=24000", "pcm;rate=24000"]);
+    const [first, second] = emitted.map((m) => Buffer.from(m.payload.audio, "base64"));
+    expect(first).toHaveLength(96000 + pcm.length);
+    expect(first.subarray(0, 96000).every((byte) => byte === 0)).toBe(true);
+    expect(first.subarray(96000).equals(pcm)).toBe(true);
+    expect(first.includes("RIFF", 96000)).toBe(false);
+    expect(second.equals(pcm)).toBe(true);
+  });
+
+  it("leaves a pcm segment that merely looks binary untouched", async () => {
+    const tts: TextToSpeechProvider = {
+      async synthesizeSpeech(): Promise<{ stream: Readable; format: string }> {
+        return { stream: Readable.from([Buffer.from("RIFF not a wav")]), format: "pcm;rate=24000" };
+      },
+    };
+    const manager = new TTSManager("s1", pino({ level: "silent" }), tts);
+    const abort = new AbortController();
+    const emitted: AudioOutputMessage[] = [];
+
+    await manager.generateAndWaitForPlayback(
+      "One sentence.",
+      (msg) => {
+        if (isAudioOutputMessage(msg)) {
+          emitted.push(msg);
+          manager.confirmAudioPlayed(msg.payload.id);
+        }
+      },
+      abort.signal,
+      false,
+      true,
+    );
+
+    expect(emitted[0].payload.format).toBe("pcm;rate=24000");
+    expect(Buffer.from(emitted[0].payload.audio, "base64").subarray(96000).toString()).toBe(
+      "RIFF not a wav",
+    );
+  });
+
   it("splits long text into safe synthesis segments", async () => {
     const calls: string[] = [];
     const tts: TextToSpeechProvider = {

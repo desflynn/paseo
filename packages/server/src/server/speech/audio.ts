@@ -1,3 +1,33 @@
+/**
+ * An OpenAI-compatible TTS shim can ignore response_format=pcm and answer with a
+ * complete WAV. Segments of a pcm-labelled clip would then carry each 44-byte header
+ * as in-band samples — a click per sentence, and garbage if the shim ever grows its
+ * header. Detect the RIFF header and hand back the raw PCM payload, adding the
+ * sample rate to the format label when the shim's answer was WAV.
+ */
+export function pcmSegmentBytes(buffer: Buffer, format: string): { bytes: Buffer; format: string } {
+  if (!format.startsWith("pcm")) return { bytes: buffer, format };
+  if (
+    buffer.length < 44 ||
+    buffer.toString("ascii", 0, 4) !== "RIFF" ||
+    buffer.toString("ascii", 8, 12) !== "WAVE"
+  ) {
+    return { bytes: buffer, format };
+  }
+  try {
+    const { sampleRate, pcm16 } = parsePcm16MonoWav(buffer);
+    const [kind, ...params] = format.split(";").map((part) => part.trim());
+    const nextFormat = params.some((part) => part.startsWith("rate="))
+      ? format
+      : `${kind};rate=${sampleRate}`;
+    return { bytes: pcm16, format: nextFormat };
+  } catch {
+    // Not a WAV we understand (stereo, 8-bit, extended): play the bytes as labelled
+    // rather than dropping a segment.
+    return { bytes: buffer, format };
+  }
+}
+
 export function parsePcm16MonoWav(buffer: Buffer): { sampleRate: number; pcm16: Buffer } {
   if (buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") {
     throw new Error("Invalid WAV header");
