@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { DaemonStartService, upsertDesktopDaemonConnection } from "./daemon-start-service";
-import type { HostRuntimeStore } from "./host-runtime";
+import type { HostRuntimeStore, HostRuntimeSummary } from "./host-runtime";
 import type { DesktopDaemonStatus } from "@/desktop/daemon/desktop-daemon";
 import { defaultHostAppearance } from "@/hosts/appearance";
-import type { HostProfile } from "@/types/host-connection";
 
 interface RecordedUpsert {
   listenAddress: string;
@@ -11,7 +10,7 @@ interface RecordedUpsert {
   hostname: string | null;
 }
 
-function createFakeStore(hosts: HostProfile[] = []): {
+function createFakeStore(hosts: HostRuntimeSummary[] = []): {
   store: Pick<HostRuntimeStore, "getHosts" | "upsertConnectionFromListen">;
   upserts: RecordedUpsert[];
 } {
@@ -43,10 +42,11 @@ function makeStatus(overrides: Partial<DesktopDaemonStatus> = {}): DesktopDaemon
   };
 }
 
-function makeRelayOnlyHost(serverId: string): HostProfile {
+function makeRelayOnlyHost(serverId: string): HostRuntimeSummary {
   return {
     serverId,
     label: "Relay host",
+    color: "none",
     appearance: defaultHostAppearance(),
     lifecycle: {},
     connections: [

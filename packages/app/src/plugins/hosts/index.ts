@@ -3,7 +3,7 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { PluginHostSummary } from "@getpaseo/plugin/client";
 
 export interface PluginHostsSource {
-  getHosts(): readonly { serverId: string; label: string }[];
+  getHosts(): readonly { serverId: string; label: string; color: PluginHostSummary["color"] }[];
   getSnapshot(serverId: string): {
     connectionStatus: PluginHostSummary["status"];
     client: DaemonClient | null;
@@ -21,9 +21,10 @@ export function createPluginHosts(source: PluginHostsSource, signal: AbortSignal
   const listeners = new Set<() => void>();
   let snapshot: readonly PluginHostSummary[] = [];
   function readHosts(): readonly PluginHostSummary[] {
-    return source.getHosts().map(({ serverId, label }) => ({
+    return source.getHosts().map(({ serverId, label, color }) => ({
       serverId,
       label,
+      color,
       status: source.getSnapshot(serverId)?.connectionStatus ?? "offline",
     }));
   }

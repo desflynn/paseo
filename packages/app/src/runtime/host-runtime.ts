@@ -24,7 +24,12 @@ import {
   type HostConnection,
   type HostProfile,
 } from "@/types/host-connection";
-import { defaultHostAppearance, type HostBadgeDisplay, type HostColor } from "@/hosts/appearance";
+import {
+  defaultHostAppearance,
+  HOST_COLORS,
+  type HostBadgeDisplay,
+  type HostColor,
+} from "@/hosts/appearance";
 import {
   buildDaemonWebSocketUrl,
   buildRelayWebSocketUrl,
@@ -1608,6 +1613,9 @@ interface AgentDirectoryRefreshInput {
   page?: FetchAgentsOptions["page"];
 }
 
+/** HostProfile plus the badge colour plugins see, resolved from the host's appearance. */
+export type HostRuntimeSummary = HostProfile & { color: HostColor };
+
 export class HostRuntimeStore {
   private controllers = new Map<string, HostRuntimeController>();
   private hostObservations = new Map<
@@ -1622,6 +1630,7 @@ export class HostRuntimeStore {
   private hostListVersion = 0;
   private hostRegistryLoaded = false;
   private hosts: HostProfile[] = [];
+  private hostSummaries: { source: HostProfile[]; view: HostRuntimeSummary[] } | null = null;
   private hostAppearanceMutationTail: Promise<void> = Promise.resolve();
   private hostRegistryStatus: HostRegistryStatus = "loading";
   private deps: HostRuntimeControllerDeps;
@@ -1653,8 +1662,16 @@ export class HostRuntimeStore {
 
   // --- Host registry ---
 
-  getHosts(): HostProfile[] {
-    return this.hosts;
+  /** Cached view so useSyncExternalStore callers get a stable snapshot identity. */
+  getHosts(): HostRuntimeSummary[] {
+    const cached = this.hostSummaries;
+    if (cached?.source === this.hosts) return cached.view;
+    const view = this.hosts.map((host) => ({
+      ...host,
+      color: HOST_COLORS.includes(host.appearance.color) ? host.appearance.color : "none",
+    }));
+    this.hostSummaries = { source: this.hosts, view };
+    return view;
   }
 
   getHostRegistryStatus(): HostRegistryStatus {

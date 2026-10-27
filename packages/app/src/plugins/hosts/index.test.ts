@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import type { PluginHostSummary } from "@getpaseo/plugin/client";
 import { createPluginHosts, type PluginHostsSource } from "./index";
 
 function registry() {
-  const hosts = [
-    { serverId: "a", label: "Alpha", password: "secret" },
-    { serverId: "b", label: "Beta", password: "secret" },
+  const hosts: {
+    serverId: string;
+    label: string;
+    password: string;
+    color: PluginHostSummary["color"];
+  }[] = [
+    { serverId: "a", label: "Alpha", password: "secret", color: "none" },
+    { serverId: "b", label: "Beta", password: "secret", color: "none" },
   ];
   const snapshots = new Map<string, NonNullable<ReturnType<PluginHostsSource["getSnapshot"]>>>();
   const listeners = new Set<() => void>();
@@ -49,8 +55,8 @@ describe("plugin host access", () => {
   it("publishes credential-free configured hosts and only changes snapshots when summaries change", () => {
     const h = registry();
     expect(h.runtime.getSnapshot()).toEqual([
-      { serverId: "a", label: "Alpha", status: "offline" },
-      { serverId: "b", label: "Beta", status: "offline" },
+      { serverId: "a", label: "Alpha", color: "none", status: "offline" },
+      { serverId: "b", label: "Beta", color: "none", status: "offline" },
     ]);
     const before = h.runtime.getSnapshot();
     h.publish();
@@ -66,6 +72,18 @@ describe("plugin host access", () => {
     expect(h.runtime.getSnapshot()[1].label).toBe("Renamed");
     h.lifetime.abort();
     expect(h.listeners.size).toBe(0);
+  });
+
+  it("carries each host's badge colour into plugin-visible summaries", () => {
+    const h = registry();
+    h.hosts[0].color = "pink";
+    h.snapshots.set("b", { connectionStatus: "online", client: connection("b") });
+    h.publish();
+    expect(h.runtime.getSnapshot()).toEqual([
+      { serverId: "a", label: "Alpha", color: "pink", status: "offline" },
+      { serverId: "b", label: "Beta", color: "none", status: "online" },
+    ]);
+    h.lifetime.abort();
   });
 
   it("rejects unknown and disconnected targets without falling through to another host", () => {

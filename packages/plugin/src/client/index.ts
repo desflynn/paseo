@@ -79,10 +79,29 @@ export declare function useSettings<Schema extends ZodType>(
   definition: SettingsDefinition<Schema>,
 ): SettingsState<Schema>;
 
+/**
+ * Badge colour for a configured host. `none` means unset: render in the theme's muted
+ * foreground. Named colours are Paseo's identity palette; resolve their values app-side
+ * per colour scheme with the identity foreground tokens.
+ */
+export type PluginHostColor =
+  | "none"
+  | "violet"
+  | "sky"
+  | "emerald"
+  | "orange"
+  | "pink"
+  | "indigo"
+  | "teal"
+  | "red"
+  | "amber"
+  | "blue";
+
 /** Configured app host, including hosts that are currently disconnected. */
 export interface PluginHostSummary {
   readonly serverId: string;
   readonly label: string;
+  readonly color: PluginHostColor;
   readonly status: "idle" | "connecting" | "online" | "offline" | "error";
 }
 /** Live configured hosts. Supplied by the app's client bundle loader. */
