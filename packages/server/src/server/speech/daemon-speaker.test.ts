@@ -3,7 +3,7 @@ import pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SessionOutboundMessage } from "../messages.js";
-import { createDaemonSpeaker, resolveWorkspaceVoice } from "./daemon-speaker.js";
+import { createDaemonSpeaker, resolveSeatVoice } from "./daemon-speaker.js";
 import type { TextToSpeechProvider } from "./speech-provider.js";
 
 const tts: TextToSpeechProvider = {
@@ -44,21 +44,37 @@ function createSpeaker(options: {
   });
 }
 
-describe("workspace voice selection", () => {
-  it("maps top-level workspaces, defaults children and preserves the global path without a map", () => {
-    const map = { "wks-joey": "bm_lewis", "wks-zoe": "af_aoede" };
+describe("seat voice selection", () => {
+  const seatVoices = { "🐨MS Joey": "bm_lewis", "👩🏼‍🦰MS Zoe": "af_aoede" };
+
+  it("keys the voice to the named seat, not its workspace; everyone else gets the default", () => {
+    // No map configured: the global configured voice stays in charge.
     expect(
-      resolveWorkspaceVoice(undefined, { workspaceId: "wks-joey", labels: {} }),
+      resolveSeatVoice(undefined, undefined, { title: "🐨MS Joey 🟩", labels: {} }),
     ).toBeUndefined();
-    expect(resolveWorkspaceVoice(map, { workspaceId: "wks-joey", labels: {} })).toBe("bm_lewis");
-    expect(resolveWorkspaceVoice(map, { workspaceId: "wks-zoe", labels: {} })).toBe("af_aoede");
+    // The named seat itself speaks in its mapped voice, flags stripped.
+    expect(resolveSeatVoice(seatVoices, "bf_lily", { title: "🐨MS Joey 🟩", labels: {} })).toBe(
+      "bm_lewis",
+    );
+    expect(resolveSeatVoice(seatVoices, "bf_lily", { title: "👩🏼‍🦰MS Zoe 🟧", labels: {} })).toBe(
+      "af_aoede",
+    );
+    // A side chat sharing the workspace, or anyone else, gets the unmapped default.
     expect(
-      resolveWorkspaceVoice(map, {
-        workspaceId: "wks-joey",
+      resolveSeatVoice(seatVoices, "bf_lily", {
+        title: "paperclip walkthrough leg",
+        labels: {},
+        workspaceId: "wks_fd5e0fbe9e9cba4c",
+      }),
+    ).toBe("bf_lily");
+    // A child agent never borrows the seat voice (and gets no speak tool at all).
+    expect(
+      resolveSeatVoice(seatVoices, "bf_lily", {
+        title: "🐨MS Joey 🟩",
         labels: { "paseo.parent-agent-id": "parent" },
       }),
     ).toBe("bf_lily");
-    expect(resolveWorkspaceVoice(map, null)).toBe("bf_lily");
+    expect(resolveSeatVoice(seatVoices, "bf_lily", null)).toBe("bf_lily");
   });
 });
 

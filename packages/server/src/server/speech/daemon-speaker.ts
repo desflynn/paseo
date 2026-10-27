@@ -5,13 +5,31 @@ import type { SessionOutboundMessage } from "../messages.js";
 import type { VoiceSpeakHandler } from "../voice-types.js";
 import type { TextToSpeechProvider } from "./speech-provider.js";
 
-export function resolveWorkspaceVoice(
+// Seat flags ride the agent title's tail (provider chip, full-auto marks, old-guy
+// tombstones). A seat voice key names the guy without its flag.
+const SEAT_FLAG_SUFFIX = /(?:\s*\((?:old|older)\))?\s*(?:♾️🏁|♾️|🏁|🟧|⬜|🟩|🟪|🟦|⬛)\s*$/u;
+
+const UNMAPPED_SEAT_VOICE = "bf_lily";
+
+/**
+ * Picks the TTS voice for a speak caller by the seat it IS, never by the workspace
+ * it shares: a side chat in Joey's workspace does not speak in Joey's voice.
+ * - no map configured: undefined, the global configured voice stays in charge
+ * - the named seat itself (title match, one trailing flag tolerated): its voice
+ * - everyone else, children included: the unmapped default (bf_lily unless set)
+ */
+export function resolveSeatVoice(
   voices: Record<string, string> | undefined,
-  agent: { workspaceId?: string; labels: Record<string, string> } | null,
+  unmappedVoice: string | undefined,
+  agent: { title?: string | null; labels: Record<string, string> } | null,
 ): string | undefined {
   if (!voices) return undefined;
-  if (!agent || agent.labels["paseo.parent-agent-id"] || !agent.workspaceId) return "bf_lily";
-  return voices[agent.workspaceId] ?? "bf_lily";
+  const fallback = unmappedVoice ?? UNMAPPED_SEAT_VOICE;
+  if (!agent || agent.labels["paseo.parent-agent-id"]) return fallback;
+  const title = (agent.title ?? "").trim();
+  if (!title) return fallback;
+  const stripped = title.replace(SEAT_FLAG_SUFFIX, "").trim();
+  return voices[title] ?? voices[stripped] ?? fallback;
 }
 
 // A 4000 character report plays for about five minutes; leave room for synthesis.

@@ -81,7 +81,7 @@ import type { ServiceProxySubsystem } from "./service-proxy.js";
 import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
 import {
   createDaemonSpeaker,
-  resolveWorkspaceVoice,
+  resolveSeatVoice,
   type DaemonSpeaker,
 } from "./speech/daemon-speaker.js";
 import { loadPersistedConfig } from "./persisted-config.js";
@@ -701,11 +701,15 @@ export class VoiceAssistantWebSocketServer {
     this.daemonSpeaker = createDaemonSpeaker({
       logger: this.logger,
       resolveTts: () => this.speech?.resolveTts() ?? null,
-      resolveVoice: (callerAgentId) =>
-        resolveWorkspaceVoice(
-          loadPersistedConfig(paseoHome, this.logger).features?.voiceMode?.tts?.workspaceVoices,
-          agentManager.getAgent(callerAgentId),
-        ),
+      resolveVoice: (callerAgentId) => {
+        const tts = loadPersistedConfig(paseoHome, this.logger).features?.voiceMode?.tts;
+        const agent = agentManager.getAgent(callerAgentId);
+        return resolveSeatVoice(
+          tts?.seatVoices,
+          tts?.unmappedVoice,
+          agent ? { title: agent.config?.title, labels: agent.labels ?? {} } : null,
+        );
+      },
       listSessions: () => this.listSessions(),
     });
     this.workspaceSetupRuntime = workspaceSetupRuntime;

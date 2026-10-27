@@ -632,6 +632,17 @@ class BoundaryAgentManagerFake {
   }
 }
 
+class LabeledAgentManagerFake extends BoundaryAgentManagerFake {
+  public constructor(private readonly agentLabels: Record<string, string>) {
+    super();
+  }
+
+  public getAgent(agentId: string): ManagedAgent | null {
+    const agent = super.getAgent(agentId);
+    return agent ? { ...agent, labels: this.agentLabels } : null;
+  }
+}
+
 class BoundaryAgentStorageFake {
   public async list(): Promise<StoredAgentRecord[]> {
     return [];
@@ -970,6 +981,35 @@ describe("Paseo tool timeline presentation", () => {
       await client.close();
       await server.close();
     }
+  });
+});
+
+describe("speak tool exposure", () => {
+  const listToolNames = async (agentLabels: Record<string, string>) => {
+    const server = await createAgentMcpServer({
+      agentManager: new LabeledAgentManagerFake(agentLabels) as AgentManager,
+      agentStorage: new BoundaryAgentStorageFake() as AgentStorage,
+      providerSnapshotManager:
+        new BoundaryProviderSnapshotManagerFake() as unknown as ProviderSnapshotManager,
+      callerAgentId: "agent-1",
+      logger: createTestLogger(),
+    });
+    const client = await connectInMemoryMcpClient(server);
+    try {
+      const { tools } = await client.listTools();
+      return tools.map((tool) => tool.name);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  };
+
+  it("never offers speak to a child agent; a top-level seat keeps it", async () => {
+    const childTools = await listToolNames({ "paseo.parent-agent-id": "parent-agent" });
+    expect(childTools).not.toContain("speak");
+
+    const topLevelTools = await listToolNames({});
+    expect(topLevelTools).toContain("speak");
   });
 });
 

@@ -146,7 +146,12 @@ const FeatureVoiceModeSchema = z
         model: z.string().min(1).optional(),
         // Free-form: self-hosted OpenAI-compatible servers expose their own voice names.
         voice: z.string().trim().min(1).optional(),
-        workspaceVoices: z.record(z.string(), z.string().trim().min(1)).optional(),
+        // Seat-keyed TTS voices: the named seat's own speak voice, matched on the
+        // agent title with one trailing seat flag tolerated. Never workspace-keyed:
+        // side chats in a guy's workspace must not borrow the guy's voice.
+        seatVoices: z.record(z.string(), z.string().trim().min(1)).optional(),
+        // Voice for every unmapped speaker when seatVoices is configured.
+        unmappedVoice: z.string().trim().min(1).optional(),
         speakerId: z.number().int().optional(),
         speed: z.number().optional(),
       })
