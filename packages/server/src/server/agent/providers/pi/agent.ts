@@ -1208,6 +1208,7 @@ export class PiRpcAgentSession implements AgentSession {
   private activeTurnId: string | null = null;
   private activeClientMessageId: string | null = null;
   private activeAssistantMessageId: string | null = null;
+  private readonly piThinkingText = new Map<string, string>();
   private activeTurnStarted = false;
   private activeTurnStartedEmitted = false;
   private pendingSettledMessages: PiAgentMessage[] | null = null;
@@ -2466,13 +2467,30 @@ export class PiRpcAgentSession implements AgentSession {
       return;
     }
     if (event.assistantMessageEvent.type === "thinking_delta") {
+      // Pi sends contentIndex plus `partial`, the full accumulated thinking (o19).
+      // Emit a stable reasoningId and authoritative text so the app can merge the
+      // block by identity instead of adjacency, surviving interleaved tool calls.
+      const responseKey =
+        event.message?.responseId ?? this.activeAssistantMessageId ?? turnId ?? "turn";
+      const contentIndex = event.assistantMessageEvent.contentIndex ?? 0;
+      const reasoningId = `${responseKey}:${contentIndex}`;
+      const delta = event.assistantMessageEvent.delta ?? "";
+      const partial = event.assistantMessageEvent.partial;
+      let text: string;
+      if (typeof partial === "string") {
+        text = partial;
+      } else {
+        text = (this.piThinkingText.get(reasoningId) ?? "") + delta;
+      }
+      this.piThinkingText.set(reasoningId, text);
       this.emit({
         type: "timeline",
         provider: this.provider,
         turnId,
         item: {
           type: "reasoning",
-          text: event.assistantMessageEvent.delta ?? "",
+          text,
+          reasoningId,
         },
       });
     }
@@ -2490,6 +2508,7 @@ export class PiRpcAgentSession implements AgentSession {
   ): void {
     if (event.message.role === "assistant") {
       this.activeAssistantMessageId = null;
+      this.piThinkingText.clear();
       return;
     }
     if (event.message.role === "custom") {

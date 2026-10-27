@@ -346,11 +346,12 @@ function assistantTimeline(
 function reasoningTimeline(
   text: string,
   provider: AgentProvider = "claude",
+  reasoningId?: string,
 ): AgentStreamEventPayload {
   return {
     type: "timeline",
     provider,
-    item: { type: "reasoning", text },
+    item: { type: "reasoning", text, ...(reasoningId ? { reasoningId } : {}) },
   };
 }
 
@@ -753,6 +754,47 @@ describe("stream reducer canonical tool calls", () => {
     expect(first).toEqual(second);
     const assistantMessage = first.find((item) => item.kind === "assistant_message");
     assert.strictEqual(assistantMessage?.text, "Hello world");
+  });
+
+  it("merges reasoning by stable id across interleaved items", () => {
+    const state = hydrateStreamState([
+      {
+        event: reasoningTimeline("Think A", "claude", "resp:0"),
+        timestamp: new Date("2025-01-01T10:00:00Z"),
+      },
+      {
+        event: assistantTimeline("interleaved answer"),
+        timestamp: new Date("2025-01-01T10:00:01Z"),
+      },
+      {
+        event: reasoningTimeline("Think A longer", "claude", "resp:0"),
+        timestamp: new Date("2025-01-01T10:00:02Z"),
+      },
+    ]);
+
+    const thoughts = state.filter((item) => item.kind === "thought");
+    expect(thoughts).toHaveLength(1);
+    expect(thoughts[0]!.text).toBe("Think A longer");
+  });
+
+  it("keeps the adjacency split for reasoning without an id", () => {
+    const state = hydrateStreamState([
+      {
+        event: reasoningTimeline("Think A"),
+        timestamp: new Date("2025-01-01T10:00:00Z"),
+      },
+      {
+        event: assistantTimeline("interleaved answer"),
+        timestamp: new Date("2025-01-01T10:00:01Z"),
+      },
+      {
+        event: reasoningTimeline("Think A longer"),
+        timestamp: new Date("2025-01-01T10:00:02Z"),
+      },
+    ]);
+
+    const thoughts = state.filter((item) => item.kind === "thought");
+    expect(thoughts).toHaveLength(2);
   });
 
   it("keeps adjacent assistant timeline items separate when message ids differ", () => {

@@ -724,6 +724,7 @@ export type ThoughtStatus = "loading" | "ready";
 export interface ThoughtItem {
   kind: "thought";
   id: string;
+  reasoningId?: string;
   timelineCursor?: TimelinePosition;
   turnId?: string;
   text: string;
@@ -980,10 +981,31 @@ function appendThought(
   text: string,
   timestamp: Date,
   timelineCursor?: TimelinePosition,
+  reasoningId?: string,
 ): StreamItem[] {
   const { chunk, hasContent } = normalizeChunk(text);
   if (!chunk) {
     return state;
+  }
+
+  // Identity merge (o19): a provider that stamps reasoning blocks with a stable
+  // id sends the accumulated text each time, so replace the block wherever it
+  // sits - even after interleaved tool calls and messages closed it. Adjacency
+  // stays the fallback for providers that send no id.
+  if (reasoningId) {
+    for (let index = state.length - 1; index >= 0; index -= 1) {
+      const entry = state[index]!;
+      if (entry.kind === "thought" && entry.reasoningId === reasoningId) {
+        const updated: ThoughtItem = {
+          ...entry,
+          ...(timelineCursor ? { timelineCursor } : {}),
+          text: chunk,
+          timestamp,
+          status: "loading",
+        };
+        return [...state.slice(0, index), updated, ...state.slice(index + 1)];
+      }
+    }
   }
 
   const last = state[state.length - 1];
@@ -1006,6 +1028,7 @@ function appendThought(
   const item: ThoughtItem = {
     kind: "thought",
     id: createUniqueTimelineId(state, "thought", idSeed, timestamp),
+    ...(reasoningId ? { reasoningId } : {}),
     ...(timelineCursor ? { timelineCursor } : {}),
     text: chunk,
     timestamp,
@@ -1530,7 +1553,7 @@ function reduceTimelineEvent(
         ),
       );
     case "reasoning":
-      return appendThought(state, item.text, timestamp, timelineCursor);
+      return appendThought(state, item.text, timestamp, timelineCursor, item.reasoningId);
     case "tool_call":
       return finalizeActiveThoughts(
         reduceTimelineToolCall(state, event, item, timestamp, timelineCursor),

@@ -910,7 +910,7 @@ describe("PiRpcAgentSession", () => {
     expect(events.timelineItems()).toEqual([
       { type: "assistant_message", text: "hel", messageId: "response-1" },
       { type: "assistant_message", text: "lo", messageId: "response-1" },
-      { type: "reasoning", text: "thinking" },
+      { type: "reasoning", text: "thinking", reasoningId: "response-1:0" },
       {
         type: "tool_call",
         callId: "tool-1",
@@ -927,6 +927,64 @@ describe("PiRpcAgentSession", () => {
         detail: { type: "shell", command: "echo hi", output: "hi\n", exitCode: 0 },
         error: null,
       },
+    ]);
+  });
+
+  test("labels pi thinking with a stable reasoning id and authoritative text", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    await session.startTurn("hello");
+    fakeSession.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [], responseId: "response-9" },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        contentIndex: 0,
+        delta: "Th",
+        partial: "Th",
+      },
+    });
+    fakeSession.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [], responseId: "response-9" },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        contentIndex: 0,
+        delta: "inking",
+        partial: "Thinking",
+      },
+    });
+    fakeSession.finishTurn();
+
+    await events.nextTurnCompletion();
+
+    expect(events.timelineItems()).toEqual([
+      { type: "reasoning", text: "Th", reasoningId: "response-9:0" },
+      { type: "reasoning", text: "Thinking", reasoningId: "response-9:0" },
+    ]);
+  });
+
+  test("accumulates pi thinking server-side when partial text is absent", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    await session.startTurn("hello");
+    fakeSession.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [], responseId: "response-10" },
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "A" },
+    });
+    fakeSession.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [], responseId: "response-10" },
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "B" },
+    });
+    fakeSession.finishTurn();
+
+    await events.nextTurnCompletion();
+
+    expect(events.timelineItems()).toEqual([
+      { type: "reasoning", text: "A", reasoningId: "response-10:0" },
+      { type: "reasoning", text: "AB", reasoningId: "response-10:0" },
     ]);
   });
 
@@ -1009,7 +1067,7 @@ describe("PiRpcAgentSession", () => {
     expect(events.timelineItems()).toEqual([
       { type: "assistant_message", text: "hel", messageId: "response-1" },
       { type: "assistant_message", text: "lo", messageId: "response-1" },
-      { type: "reasoning", text: "thinking" },
+      { type: "reasoning", text: "thinking", reasoningId: "response-1:0" },
     ]);
   });
 
