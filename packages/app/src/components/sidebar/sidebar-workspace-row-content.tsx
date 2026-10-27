@@ -183,23 +183,9 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
         </View>
       );
     }
-    // Active rows carry their status glyph whatever grouping put them there — hoisted under a
-    // project or flat in a status group, the leading slot is the row's state, one glyph per
-    // agent. Only done rows keep the project icon: no status to report, and the spec keeps
-    // the repo icon on their reclaimed line.
-    if (leadingProjectName && workspace.statusBucket === "done" && !isLoading) {
-      return (
-        <ProjectStatusIndicator
-          iconDataUri={leadingProjectIconDataUri}
-          displayName={leadingProjectName}
-          projectViewKey={workspace.projectViewKey}
-          statusBucket={workspace.statusBucket}
-          backdrop={backdrop}
-          loading={isLoading}
-          testID={`sidebar-row-project-icon-${workspace.workspaceKey}`}
-        />
-      );
-    }
+    // The status glyph is a marker column in front of the row, exactly like the pinned
+    // marker: active agents get their glyph, done agents get no marker (the leading column
+    // shrinks to a quarter). The row's regular rendering — repo icon included — stays intact.
     return (
       <WorkspaceStatusIndicator
         bucket={workspace.statusBucket}
@@ -213,6 +199,17 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
     <View style={styles.workspaceRowContent}>
       <View style={styles.workspaceRowMain}>
         {renderLeadingVisual()}
+        {leadingProjectName ? (
+          <ProjectStatusIndicator
+            iconDataUri={leadingProjectIconDataUri}
+            displayName={leadingProjectName}
+            projectViewKey={workspace.projectViewKey}
+            statusBucket={workspace.statusBucket}
+            backdrop={backdrop}
+            loading={isLoading}
+            testID={`sidebar-row-project-icon-${workspace.workspaceKey}`}
+          />
+        ) : null}
         <View style={styles.workspaceContentColumn}>
           <View style={styles.workspaceTitleRow}>
             <Text style={workspaceBranchTextStyle} numberOfLines={1}>
