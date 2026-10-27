@@ -14,7 +14,7 @@ import path from "node:path";
 import pino from "pino";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { describe, expect, onTestFinished, test } from "vitest";
+import { describe, expect, onTestFinished, test, vi } from "vitest";
 
 import type { AgentSession, AgentSessionConfig, AgentStreamEvent } from "../../agent-sdk-types.js";
 import {
@@ -3748,4 +3748,50 @@ describe("transformPiModels", () => {
       },
     ]);
   });
+});
+
+test("stops waiting for a slow first get_state and refreshes in the background (o11)", async () => {
+  vi.useFakeTimers();
+  try {
+    const pi = new FakePi();
+    pi.queueSessionSetup((session) => {
+      session.getStateDelayMs = 8_000;
+    });
+    const client = createClient(pi);
+
+    const createPromise = client.createSession(createConfig());
+    await vi.advanceTimersByTimeAsync(1_500);
+    // Still waiting: the create must not resolve before the cap.
+    const settledEarly = await Promise.race([
+      createPromise.then(() => true),
+      Promise.resolve(false),
+    ]);
+    expect(settledEarly).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(600);
+    const session = (await createPromise) as PiRpcAgentSession;
+
+    // Placeholder state: no session id until the real state lands.
+    const stateBefore = (session as unknown as { state: PiSessionState }).state;
+    expect(stateBefore.sessionId).toBe("");
+    expect(stateBefore.isStreaming).toBe(false);
+
+    // The register path's runtime-info read must not block on pi either (o11).
+    let infoSettled = false;
+    const runtimeInfoPromise = session.getRuntimeInfo().then((info) => {
+      infoSettled = true;
+      return info;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(infoSettled).toBe(true);
+    const runtimeInfo = await runtimeInfoPromise;
+    expect(runtimeInfo.sessionId).toBe("");
+
+    // The real state lands from the same outstanding request once pi answers.
+    await vi.advanceTimersByTimeAsync(8_000);
+    const stateAfter = (session as unknown as { state: PiSessionState }).state;
+    expect(stateAfter.sessionId).toBe(pi.sessions[0].state.sessionId);
+  } finally {
+    vi.useRealTimers();
+  }
 });

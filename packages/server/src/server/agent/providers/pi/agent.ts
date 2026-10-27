@@ -74,6 +74,7 @@ import {
 } from "./extensions/index.js";
 import { revertPiConversation } from "./rewind.js";
 import { listPiImportableSessions, readPiImportSessionConfig } from "./session-descriptor.js";
+import { withTimeout } from "../../../../utils/promise-timeout.js";
 import type { PiRuntime, PiRuntimeSession, PiStartSessionInput } from "./runtime.js";
 import type {
   PiAgentSessionEvent,
@@ -799,6 +800,18 @@ function combineCleanup(cleanups: Array<(() => void) | undefined>): (() => void)
   };
 }
 
+function placeholderPiSessionState(config: AgentSessionConfig): PiSessionState {
+  return {
+    model: null,
+    thinkingLevel: normalizePiThinkingOption(config.thinkingOptionId) ?? "medium",
+    isStreaming: false,
+    isCompacting: false,
+    sessionId: "",
+    messageCount: 0,
+    pendingMessageCount: 0,
+  };
+}
+
 function isPiMcpAdapterCommand(command: PiRpcSlashCommand): boolean {
   if (command.source !== "extension" || !/^mcp(?::\d+)?$/.test(command.name)) {
     return false;
@@ -1276,6 +1289,29 @@ export class PiRpcAgentSession implements AgentSession {
     this.runtimeSession.onEvent((event) => {
       this.handleRuntimeEvent(event);
     });
+  }
+
+  /** o11: adoption path for a deferred initial state — the create returned a
+   * placeholder before pi's first reply; this lands the real state from the
+   * same outstanding request as soon as pi answers. While it is pending,
+   * state refreshes serve the placeholder instead of piling a new round-trip
+   * onto the same slow first reply. */
+  private deferredInitialState: Promise<PiSessionState> | null = null;
+
+  refreshInitialState(pending: Promise<PiSessionState>): void {
+    this.deferredInitialState = pending;
+    void (async () => {
+      try {
+        const state = await pending;
+        this.state = state;
+        this.config.thinkingOptionId = state.thinkingLevel;
+      } catch {
+        // pi never answered its first get_state; the placeholder stands until
+        // the next runtime event replaces it.
+      } finally {
+        this.deferredInitialState = null;
+      }
+    })();
   }
 
   private readonly runtimeSession: PiRuntimeSession;
@@ -2556,6 +2592,9 @@ export class PiRpcAgentSession implements AgentSession {
   }
 
   private async refreshState(): Promise<void> {
+    if (this.deferredInitialState) {
+      return;
+    }
     this.state = await this.runtimeSession.getState();
     this.config.thinkingOptionId = this.state.thinkingLevel;
   }
@@ -2623,15 +2662,13 @@ export class PiRpcAgentClient implements AgentClient {
       throw error;
     }
     try {
-      return new PiRpcAgentSession({
+      return await this.buildAgentSession({
         runtimeSession,
         config,
-        initialState: await runtimeSession.getState(),
-        capabilities: capabilitiesForSession(mcp !== null),
-        cleanup: combineCleanup([mcpConfigFile?.cleanup, paseoExtension?.cleanup]),
-        extensionTimeoutMs: providerOptions.extensionTimeoutMs,
-        logger: this.logger,
-        usagePollScheduler: this.usagePollScheduler,
+        mcp,
+        mcpConfigFile,
+        paseoExtension,
+        providerOptions,
       });
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);
@@ -2639,6 +2676,29 @@ export class PiRpcAgentClient implements AgentClient {
       paseoExtension?.cleanup();
       throw error;
     }
+  }
+
+  private async buildAgentSession(input: {
+    runtimeSession: PiRuntimeSession;
+    config: AgentSessionConfig;
+    mcp: PiMcpInjection | null;
+    mcpConfigFile: PiTempFile | null;
+    paseoExtension: PiTempFile | null;
+    providerOptions: z.infer<typeof PiProviderOptionsSchema>;
+  }): Promise<PiRpcAgentSession> {
+    const initial = await this.resolveInitialState(input.runtimeSession, input.config);
+    const session = new PiRpcAgentSession({
+      runtimeSession: input.runtimeSession,
+      config: input.config,
+      initialState: initial.state,
+      capabilities: capabilitiesForSession(input.mcp !== null),
+      cleanup: combineCleanup([input.mcpConfigFile?.cleanup, input.paseoExtension?.cleanup]),
+      extensionTimeoutMs: input.providerOptions.extensionTimeoutMs,
+      logger: this.logger,
+      usagePollScheduler: this.usagePollScheduler,
+    });
+    if (initial.pending) session.refreshInitialState(initial.pending);
+    return session;
   }
 
   async resumeSession(
@@ -2746,6 +2806,36 @@ export class PiRpcAgentClient implements AgentClient {
 
   /** o11: catalog fetch cap; idle pi answers <1.5s, loaded <5s. Never uncapped. */
   private readonly CATALOG_REQUEST_TIMEOUT_MS = 10_000;
+
+  /** o11: pi's first RPC reply waits on its global MCP init (1s idle, 18-25s
+   * under fleet load). Creation must not pay that: cap the wait and refresh
+   * the session state in the background from the same outstanding request. */
+  private static readonly INITIAL_STATE_TIMEOUT_MS = 2_000;
+
+  private async resolveInitialState(
+    runtimeSession: PiRuntimeSession,
+    config: AgentSessionConfig,
+  ): Promise<{
+    state: PiSessionState;
+    pending: Promise<PiSessionState> | null;
+  }> {
+    const statePromise = runtimeSession.getState();
+    try {
+      return {
+        state: await withTimeout(
+          statePromise,
+          PiRpcAgentClient.INITIAL_STATE_TIMEOUT_MS,
+          "Pi initial get_state timed out",
+        ),
+        pending: null,
+      };
+    } catch {
+      return {
+        state: placeholderPiSessionState(config),
+        pending: statePromise,
+      };
+    }
+  }
 
   async fetchCatalog(
     options: FetchCatalogOptions,

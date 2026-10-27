@@ -142,6 +142,7 @@ export class FakePiSession implements PiRuntimeSession {
   compactError: Error | null = null;
   emitCompactEnd = true;
   getStateError: Error | null = null;
+  getStateDelayMs = 0;
   getSessionStatsError: Error | null = null;
   promptAck: PiPromptAck = {};
   branchResponse: { text?: string; cancelled?: boolean } = { text: "" };
@@ -263,6 +264,9 @@ export class FakePiSession implements PiRuntimeSession {
   }
 
   async getState(): Promise<PiSessionState> {
+    if (this.getStateDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.getStateDelayMs));
+    }
     if (this.getStateError) {
       throw this.getStateError;
     }
