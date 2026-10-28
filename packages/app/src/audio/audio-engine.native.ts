@@ -145,6 +145,10 @@ export function createAudioEngine(
     if (!refs.captureActive) {
       await setAudioModeAsync({
         playsInSilentMode: true,
+        // Speech keeps playing with the app backgrounded: the manifest already carries
+        // the mediaPlayback foreground service, and expo-audio only abandons the session
+        // on backgrounding when this is false.
+        shouldPlayInBackground: true,
         allowsRecording: false,
         interruptionMode: "duckOthers",
         interruptionModeAndroid: "duckOthers",
