@@ -1,4 +1,4 @@
-const { withMainApplication, withAndroidMainActivity } = require("expo/config-plugins");
+const { withMainApplication, withMainActivity } = require("expo/config-plugins");
 
 const PACKAGE_LIST = "PackageList(this).packages.apply {";
 const PACKAGE_REGISTRATION = "add(sh.paseo.volumekeys.PaseoVolumeKeysPackage())";
@@ -35,7 +35,7 @@ function injectVolumeKeyDown(contents) {
 }
 
 module.exports = (config) =>
-  withAndroidMainActivity(
+  withMainActivity(
     withMainApplication(config, (mod) => {
       mod.modResults.contents = registerVolumeKeysPackage(mod.modResults.contents);
       return mod;
