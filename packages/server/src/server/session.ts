@@ -1647,6 +1647,16 @@ export class Session {
   }
 
   /**
+   * False once every socket is gone. A reconnectable connection lingers in the session
+   * list while it waits out its reconnect grace — its prompt history intact — and speech
+   * aimed at it vanishes with its sockets. The daemon speaker asks this before it picks
+   * a playback client, so audio only ever targets a client that can still hear it.
+   */
+  public hasLiveDeliverySource(): boolean {
+    return this.clientSources.size > 0;
+  }
+
+  /**
    * Send initial state to client after connection
    */
   public async sendInitialState(): Promise<void> {

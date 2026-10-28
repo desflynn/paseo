@@ -19,6 +19,7 @@ function createClients(count: number) {
     isAppClient: () => true,
     lastInteractionAt: () => 1000 + index,
     lastUserPromptAt: (_agentId: string) => 0,
+    hasLiveDeliverySource: () => true,
     sendToAllSources: (message: SessionOutboundMessage) => {
       messages.push(message);
     },
@@ -32,6 +33,7 @@ function createSpeaker(options: {
     isAppClient: () => boolean;
     lastInteractionAt: () => number;
     lastUserPromptAt: (agentId: string) => number;
+    hasLiveDeliverySource: () => boolean;
     sendToAllSources: (message: SessionOutboundMessage) => void;
   }>;
   playbackTimeoutMs?: number;
@@ -140,6 +142,35 @@ describe("createDaemonSpeaker", () => {
     await playback;
   });
 
+  it("never targets a disconnected client lingering in reconnect grace, even one holding the last prompt", async () => {
+    const { received, sessions } = createClients(2);
+    // Client 0's socket died — the app closed or the connection dropped — but its
+    // connection lingers awaiting reconnect, still holding Des's last prompt in this
+    // chat. The audio must reach the live client 1, not the corpse.
+    sessions[0].lastUserPromptAt = (agentId) => (agentId === "agent-1" ? 500 : 0);
+    sessions[0].hasLiveDeliverySource = () => false;
+    sessions[1].lastUserPromptAt = (agentId) => (agentId === "agent-2" ? 900 : 0);
+    const speaker = createSpeaker({ sessions });
+
+    const playback = speaker.speak({ text: "Spoken report.", callerAgentId: "agent-1" });
+    await vi.waitFor(() => expect(received[1]).toHaveLength(1));
+    expect(received[0]).toHaveLength(0);
+    const message = received[1][0];
+    if (message.type !== "audio_output") throw new Error("expected audio_output");
+    speaker.confirmAudioPlayed(message.payload.id);
+    await playback;
+  });
+
+  it("rejects when every app client is a disconnected lingering connection", async () => {
+    const { sessions } = createClients(1);
+    sessions[0].hasLiveDeliverySource = () => false;
+    const speaker = createSpeaker({ sessions });
+
+    await expect(speaker.speak({ text: "Hello.", callerAgentId: "agent-1" })).rejects.toThrow(
+      "No app client is connected",
+    );
+  });
+
   it("keeps playing on the same client for a whole report, then re-picks for the next", async () => {
     const { received, sessions } = createClients(2);
     const speaker = createSpeaker({ sessions });
@@ -195,6 +226,7 @@ describe("createDaemonSpeaker", () => {
       isAppClient: () => false,
       lastInteractionAt: () => 9999,
       lastUserPromptAt: () => 9999,
+      hasLiveDeliverySource: () => true,
       sendToAllSources: (message: SessionOutboundMessage) => {
         plugin.push(message);
       },

@@ -38,6 +38,8 @@ const DEFAULT_PLAYBACK_TIMEOUT_MS = 10 * 60 * 1000;
 interface DaemonSpeakerSession {
   /** Mobile and browser/desktop app sessions play audio; plugin, CLI and MCP sessions do not. */
   isAppClient(): boolean;
+  /** False once every socket is gone — a connection lingering in reconnect grace has none. */
+  hasLiveDeliverySource(): boolean;
   /** When the client last did something (not a heartbeat), in epoch milliseconds. */
   lastInteractionAt(): number;
   /** When the user last typed a prompt to this agent on this client; 0 if never. */
@@ -91,7 +93,8 @@ export function createDaemonSpeaker(options: {
   const { logger, resolveTts, listSessions } = options;
   const playbackTimeoutMs = options.playbackTimeoutMs ?? DEFAULT_PLAYBACK_TIMEOUT_MS;
   const ttsManager = new TTSManager("daemon-speaker", logger, resolveTts);
-  const listAppSessions = () => listSessions().filter((session) => session.isAppClient());
+  const listAppSessions = () =>
+    listSessions().filter((session) => session.isAppClient() && session.hasLiveDeliverySource());
 
   const speak: VoiceSpeakHandler = async ({ text, callerAgentId, signal }) => {
     if (!resolveTts()) {
