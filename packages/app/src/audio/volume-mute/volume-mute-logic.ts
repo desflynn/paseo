@@ -1,40 +1,32 @@
 /**
- * Volume-key mute with rapid-press debounce, per Des's spec:
- * - a single volume-down press mutes speech playback once the debounce
- *   window has expired with no second press
- * - 2-3 rapid downs inside the window are a volume burst: they step the
- *   system volume and never mute
- * - when the burst settles, a fresh single down mutes again
- * - volume-up unmutes
- * - mute is silent playback, never a pause: this module only tracks state,
- *   the caller mutes/unmutes the player through onMuteChange
+ * Volume-step ducking, per Des's final spec (28 Oct, superseding the
+ * burst-debounce this file used to carry):
+ * - one volume-down press mutes the playing speech AT ONCE
+ * - the NEXT volume step in EITHER direction (down or up) resumes playback at
+ *   the new system volume — the OS already stepped it; the key observer never
+ *   consumes
+ * - repeatable mid-utterance, one step per toggle
+ * - mute is silent playback, never a pause: this module only tracks state, the
+ *   caller mutes/unmutes the player through onMuteChange
  *
- * Pure time-in/state-out logic: the caller supplies timestamps, so tests
- * need no timers and native wiring needs no clock.
+ * Pure state logic with no clock: every press takes effect the moment it
+ * lands, so tests need no timers and the native wiring needs no timestamps.
  */
 export interface VolumeMuteLogic {
-  /** A volume-down key press at `now` (ms, monotonic). */
-  down(now: number): void;
-  /** A volume-up key press at `now` (ms, monotonic). */
-  up(now: number): void;
-  /** Advance time: settle expired windows and fire the pending mute. */
-  tick(now: number): void;
+  /** A volume-down key press: mutes, or resumes when already muted. */
+  down(): void;
+  /** A volume-up key press: resumes when muted, otherwise nothing. */
+  up(): void;
   isMuted(): boolean;
-  /** Speech playback ended: drop every pending state and unmute. */
+  /** Speech playback ended: unmute so the next utterance starts clean. */
   playbackStopped(): void;
 }
 
-export function createVolumeMuteLogic(options: {
-  windowMs: number;
+export function createVolumeMuteLogic(options?: {
   onMuteChange?: (muted: boolean) => void;
 }): VolumeMuteLogic {
-  const { windowMs, onMuteChange } = options;
+  const onMuteChange = options?.onMuteChange;
   let muted = false;
-  // A first down press whose window has not expired yet: it becomes a mute
-  // if no second press arrives before the window closes.
-  let pendingSince: number | null = null;
-  // The last press of a burst that already cancelled its pending mute.
-  let burstSince: number | null = null;
 
   const setMuted = (value: boolean) => {
     if (muted === value) return;
@@ -43,43 +35,16 @@ export function createVolumeMuteLogic(options: {
   };
 
   return {
-    down(now: number): void {
-      const inPending = pendingSince !== null && now - pendingSince < windowMs;
-      const inBurst = burstSince !== null && now - burstSince < windowMs;
-      if (inPending) {
-        // Second press inside the window: this is a volume burst, not a mute.
-        burstSince = now;
-        pendingSince = null;
-        return;
-      }
-      if (inBurst) {
-        burstSince = now;
-        return;
-      }
-      // Fresh press. While already muted the state never changes, so there
-      // is nothing to arm.
-      if (!muted) pendingSince = now;
+    down(): void {
+      setMuted(!muted);
     },
-    up(now: number): void {
-      // Volume-up only ever unmutes; bursts are unaffected.
+    up(): void {
       setMuted(false);
-      void now;
-    },
-    tick(now: number): void {
-      if (pendingSince !== null && now - pendingSince >= windowMs) {
-        pendingSince = null;
-        setMuted(true);
-      }
-      if (burstSince !== null && now - burstSince >= windowMs) {
-        burstSince = null;
-      }
     },
     isMuted(): boolean {
       return muted;
     },
     playbackStopped(): void {
-      pendingSince = null;
-      burstSince = null;
       setMuted(false);
     },
   };

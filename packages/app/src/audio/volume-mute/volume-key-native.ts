@@ -5,7 +5,7 @@ import { createVolumeKeyController } from "./volume-key-controller";
 /**
  * Android glue: hardware volume-key presses arrive from the
  * paseo-volume-keys native module as "PaseoVolumeKey" events
- * ("down" | "up"). This wires them to the mute controller, applies the
+ * ("down" | "up"). This wires them to the ducking controller, applies the
  * result to the engine, and resets the controller whenever speech playback
  * ends. Non-Android platforms have no native emitter and get a no-op.
  */
@@ -13,7 +13,6 @@ export function attachVolumeKeyMute(
   engine: Pick<import("../audio-engine-types").AudioEngine, "setPlaybackMuted">,
   options?: {
     deviceEventEmitter?: typeof import("react-native").DeviceEventEmitter;
-    windowMs?: number;
   },
 ) {
   if (Platform.OS !== "android") return () => {};
@@ -23,7 +22,6 @@ export function attachVolumeKeyMute(
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     require("react-native").DeviceEventEmitter;
   const controller = createVolumeKeyController({
-    windowMs: options?.windowMs ?? 300,
     setMuted: (muted) => engine.setPlaybackMuted(muted),
   });
   const keySubscription = emitter.addListener("PaseoVolumeKey", (direction: string) => {
