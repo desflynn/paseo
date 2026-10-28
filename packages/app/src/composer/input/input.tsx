@@ -4,6 +4,7 @@ import {
   type ComposerEditingSession,
 } from "@/composer/editing-session";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
 import {
   View,
   Text,
@@ -21,12 +22,22 @@ import {
   useLayoutEffect,
   useImperativeHandle,
   useMemo,
+  useSyncExternalStore,
   forwardRef,
 } from "react";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
-import { ArrowUp, Mic, MicOff, CornerDownLeft, Plus, Square } from "lucide-react-native";
+import {
+  ArrowUp,
+  AudioLines,
+  ClipboardPaste,
+  Mic,
+  MicOff,
+  CornerDownLeft,
+  Plus,
+  Square,
+} from "lucide-react-native";
 import { useDictation } from "@/hooks/use-dictation";
 import { hasFinePointer } from "@/hooks/use-fine-pointer";
 import { DictationOverlay } from "@/components/dictation-controls";
@@ -43,6 +54,8 @@ import {
 import type { ComposerAttachment } from "@/attachments/types";
 import type { ImageAttachment, MessagePayload, TextReplacement } from "@/composer/types";
 import { focusWithRetries } from "@/utils/web-focus";
+import { AUTO_SEND_DELAY_MS, resolvePasteAutoSend } from "./paste-send";
+import { playbackActiveStore } from "@/audio/playback-active-store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Shortcut } from "@/components/ui/shortcut";
 import {
@@ -57,7 +70,7 @@ import { formatShortcut, type ShortcutKey } from "@/utils/format-shortcut";
 import { getShortcutOs } from "@/utils/shortcut-platform";
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
 import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
-import { isWeb } from "@/constants/platform";
+import { isWeb, isNative } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useComposerKeyboardScope } from "@/composer/keyboard-scope";
 import { RenderProfile } from "@/utils/render-profiler";
@@ -634,6 +647,7 @@ interface ComposerTextSurfaceProps {
   scrollEnabled: boolean;
   autoFocus: boolean;
   onKeyPress: ((event: WebTextInputKeyPressEvent) => void) | undefined;
+  onTextInput: EditingTextInputProps["onTextInput"];
   onSelectionChange: (event: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => void;
   onPasteImages: ((files: readonly NativePastedFile[]) => void) | undefined;
   onPasteError: (message: string) => void;
@@ -703,6 +717,7 @@ function ComposerTextSurface(props: ComposerTextSurfaceProps): React.ReactElemen
         scrollEnabled={props.scrollEnabled}
         editable={props.editable}
         onKeyPress={props.onKeyPress}
+        onTextInput={props.onTextInput}
         onSelectionChange={props.onSelectionChange}
         onPasteImages={props.onPasteImages}
         onPasteError={props.onPasteError}
@@ -714,6 +729,63 @@ function ComposerTextSurface(props: ComposerTextSurfaceProps): React.ReactElemen
         label={props.focusHintLabel}
       />
     </View>
+  );
+}
+
+const ThemedClipboardPaste = withUnistyles(ClipboardPaste);
+const ThemedAudioLines = withUnistyles(AudioLines);
+const speakUnderwayColorMapping = (theme: Theme) => ({
+  color: theme.colors.statusDotRunning,
+});
+const pasteSendArmedColorMapping = (theme: Theme) => ({
+  color: theme.colors.statusDotSuccess,
+});
+const pasteSendIdleColorMapping = (theme: Theme) => ({
+  color: theme.colors.foregroundMuted,
+});
+const PASTE_SEND_ARMED_LABEL = "Paste-send armed";
+const PASTE_SEND_IDLE_LABEL = "Paste-send off";
+
+/**
+ * Speaks-now marker for the composer toolbar: present exactly while speech output plays,
+ * first slot in the left group so the existing icons never shift when it appears or goes.
+ */
+function SpeakUnderwayIndicator() {
+  const active = useSyncExternalStore(playbackActiveStore.subscribe, playbackActiveStore.get);
+  if (!active) return null;
+  return (
+    <View pointerEvents="none" testID="composer-speak-underway">
+      <ThemedAudioLines size={ICON_SIZE.sm} uniProps={speakUnderwayColorMapping} />
+    </View>
+  );
+}
+
+/**
+ * The paste-send toggle replaces the stock dictate icon on native: green when armed, grey
+ * when off. Armed, a pasted phrase sends itself about 100 ms after landing; typing never
+ * auto-sends.
+ */
+function PasteSendToggleButton({
+  armed,
+  onToggle,
+  iconSize,
+}: {
+  armed: boolean;
+  onToggle: () => void;
+  iconSize: number;
+}) {
+  return (
+    <ToolbarButton
+      label={armed ? PASTE_SEND_ARMED_LABEL : PASTE_SEND_IDLE_LABEL}
+      selected={armed}
+      onPress={onToggle}
+      testID="composer-paste-send-toggle"
+    >
+      <ThemedClipboardPaste
+        size={iconSize}
+        uniProps={armed ? pasteSendArmedColorMapping : pasteSendIdleColorMapping}
+      />
+    </ToolbarButton>
   );
 }
 
@@ -1654,6 +1726,9 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         preserveHeightOnSubmit,
         exitFullscreen,
       });
+      // The caret goes straight back into the box after a send, so the next paste needs no
+      // re-tap. The keyboard rises with it — the simplest refocus, per the dictation flow.
+      textInputRef.current?.focus();
     }, [
       allowEmptySubmit,
       attachments,
@@ -1690,6 +1765,47 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         handleQueueMessage,
       });
     }, [defaultSendBehavior, isAgentRunning, onQueue, handleQueueMessage, handleSendMessage]);
+
+    const [pasteSendArmed, setPasteSendArmed] = useState(false);
+    const pasteSendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(
+      () => () => {
+        if (pasteSendTimerRef.current) clearTimeout(pasteSendTimerRef.current);
+      },
+      [],
+    );
+    const handlePasteSendToggle = useCallback(() => {
+      setPasteSendArmed((armed) => {
+        if (armed && pasteSendTimerRef.current) {
+          clearTimeout(pasteSendTimerRef.current);
+          pasteSendTimerRef.current = null;
+        }
+        return !armed;
+      });
+    }, []);
+    const handleTextInputSegment = useCallback(
+      (event: Parameters<NonNullable<EditingTextInputProps["onTextInput"]>>[0]) => {
+        const segment = event.nativeEvent;
+        if (
+          !resolvePasteAutoSend({
+            armed: pasteSendArmed,
+            event: {
+              text: segment.text,
+              previousText: segment.previousText ?? "",
+              range: segment.range ?? { start: 0, end: 0 },
+            },
+          })
+        ) {
+          return;
+        }
+        if (pasteSendTimerRef.current) clearTimeout(pasteSendTimerRef.current);
+        pasteSendTimerRef.current = setTimeout(() => {
+          pasteSendTimerRef.current = null;
+          handleDefaultSendAction();
+        }, AUTO_SEND_DELAY_MS);
+      },
+      [pasteSendArmed, handleDefaultSendAction],
+    );
 
     const handleAlternateSendAction = useCallback(() => {
       runAlternateSendAction({
@@ -2005,6 +2121,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
             scrollEnabled={isComposerScrollEnabled}
             autoFocus={false}
             onKeyPress={shouldHandleWebKeyPress ? handleDesktopKeyPress : undefined}
+            onTextInput={handleTextInputSegment}
             onSelectionChange={handleSelectionChange}
             onPasteImages={onPasteImages}
             onPasteError={handlePasteError}
@@ -2037,6 +2154,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         isComposerScrollEnabled,
         shouldHandleWebKeyPress,
         handleDesktopKeyPress,
+        handleTextInputSegment,
         handleSelectionChange,
         onPasteImages,
         handlePasteError,
@@ -2052,6 +2170,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         <View style={styles.buttonRow}>
           {/* Toolbar left: attachment button + agent controls */}
           <View style={styles.leftButtonGroup}>
+            <SpeakUnderwayIndicator />
             <AttachmentDropdown
               visible={mode.showAttachments}
               isConnected={isConnected}
@@ -2067,18 +2186,26 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
           {/* Right: voice button, contextual button (realtime/send/cancel) */}
           <View style={styles.rightButtonGroup}>
             {beforeVoiceContent}
-            <VoiceButtonTooltip
-              visible={mode.showVoice}
-              onVoicePress={handleVoicePress}
-              isDictationStartEnabled={isDictationStartEnabled}
-              voiceButtonAccessibilityLabel={voiceButtonAccessibilityLabel}
-              voiceButtonStyle={voiceButtonStyle}
-              renderVoiceButtonIcon={renderVoiceButtonIcon}
-              voiceTooltipText={voiceTooltipText}
-              isRealtimeVoiceForCurrentAgent={isRealtimeVoiceForCurrentAgent}
-              voiceMuteToggleKeys={voiceMuteToggleKeys}
-              dictationToggleKeys={dictationToggleKeys}
-            />
+            {isNative ? (
+              <PasteSendToggleButton
+                armed={pasteSendArmed}
+                onToggle={handlePasteSendToggle}
+                iconSize={buttonIconSize}
+              />
+            ) : (
+              <VoiceButtonTooltip
+                visible={mode.showVoice}
+                onVoicePress={handleVoicePress}
+                isDictationStartEnabled={isDictationStartEnabled}
+                voiceButtonAccessibilityLabel={voiceButtonAccessibilityLabel}
+                voiceButtonStyle={voiceButtonStyle}
+                renderVoiceButtonIcon={renderVoiceButtonIcon}
+                voiceTooltipText={voiceTooltipText}
+                isRealtimeVoiceForCurrentAgent={isRealtimeVoiceForCurrentAgent}
+                voiceMuteToggleKeys={voiceMuteToggleKeys}
+                dictationToggleKeys={dictationToggleKeys}
+              />
+            )}
             {rightContent}
             {sendButton}
           </View>
@@ -2104,6 +2231,9 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         isRealtimeVoiceForCurrentAgent,
         voiceMuteToggleKeys,
         dictationToggleKeys,
+        pasteSendArmed,
+        handlePasteSendToggle,
+        buttonIconSize,
         rightContent,
         sendButton,
       ],
