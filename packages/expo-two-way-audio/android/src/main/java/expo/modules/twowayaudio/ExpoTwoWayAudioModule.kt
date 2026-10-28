@@ -43,6 +43,10 @@ class ExpoTwoWayAudioModule : Module() {
              null
          }
 
+         Function("isScoRouteRequested") {
+             audioEngine?.isScoRouteRequested() ?: false
+         }
+
          Function("isRecording") {
              audioEngine?.isRecording ?: false
          }

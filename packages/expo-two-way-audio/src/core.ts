@@ -59,6 +59,21 @@ export function setPlaybackMuted(muted: boolean) {
   return ExpoTwoWayAudioModule.setPlaybackMuted(muted);
 }
 
+/**
+ * Whether the active communication route holds a Bluetooth SCO/BLE call link
+ * (a snapshot read, not Bluetooth event keying). The first line of a speak
+ * group waits for SCO to settle.
+ */
+export function isScoRouteRequested(): boolean {
+  // COMPAT(isScoRouteRequested): added after v0.11.2. An OTA JS update can land
+  // on an older binary whose native module lacks this function, so probe the
+  // native object rather than this wrapper (which always exists).
+  if (typeof ExpoTwoWayAudioModule.isScoRouteRequested !== "function") {
+    return false;
+  }
+  return ExpoTwoWayAudioModule.isScoRouteRequested();
+}
+
 export function tearDown() {
   return ExpoTwoWayAudioModule.tearDown();
 }

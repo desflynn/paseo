@@ -11,6 +11,10 @@ import { createPlaybackQueue } from "./playback";
 import { playFile } from "./file-playback";
 import { playPcm16 } from "./pcm";
 
+/** Bluetooth SCO needs a few hundred ms to negotiate; hold the first line of a
+ * speak group this long so it never plays into a half-open call link. */
+const SCO_SETTLE_DELAY_MS = 500;
+
 export function createAudioEngine(
   callbacks: AudioEngineCallbacks,
   options?: AudioEngineOptions & {
@@ -27,6 +31,7 @@ export function createAudioEngine(
     destroyed: boolean;
     playbackMuted: boolean;
     duplexPlaying: boolean;
+    duplexGroupFresh: boolean;
     activePlayer: { volume?: number } | null;
   } = {
     initialized: false,
@@ -34,6 +39,7 @@ export function createAudioEngine(
     muted: false,
     playbackMuted: false,
     duplexPlaying: false,
+    duplexGroupFresh: true,
     activePlayer: null,
     destroyed: false,
   };
@@ -108,6 +114,8 @@ export function createAudioEngine(
     }
     // The wrapper no-ops on binaries whose native module predates this function.
     native.releaseAudioSession();
+    // A fresh speak group starts here: its first chunk owns the SCO settle.
+    refs.duplexGroupFresh = true;
   }
 
   async function ensureMicrophonePermission(): Promise<void> {
@@ -140,7 +148,16 @@ export function createAudioEngine(
       if (refs.playbackMuted) native.setPlaybackMuted(true);
       refs.duplexPlaying = true;
       try {
-        return await playPcm16(captured, audio.type, signal, native);
+        return await playPcm16(captured, audio.type, signal, native, {
+          settleDelayMs: () => {
+            // A capture-held route was never released, so SCO is long settled;
+            // only the first chunk after a real idle release waits. Reading the
+            // route's SCO state is a snapshot, not Bluetooth event keying.
+            const fresh = refs.duplexGroupFresh && !refs.captureActive;
+            refs.duplexGroupFresh = false;
+            return fresh && (native.isScoRouteRequested?.() ?? false) ? SCO_SETTLE_DELAY_MS : 0;
+          },
+        });
       } finally {
         refs.duplexPlaying = false;
       }

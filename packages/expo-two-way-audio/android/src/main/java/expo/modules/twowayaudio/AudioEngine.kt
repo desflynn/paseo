@@ -69,6 +69,12 @@ class AudioEngine (context: Context) {
     private var isRecordingBeforePause = false
     var isPlaying = false
 
+    /** Whether the active communication route holds a Bluetooth SCO/BLE call link. */
+    @Volatile private var communicationRouteUsesSco = false
+
+    /** Speak's first line waits for SCO to settle; JS reads this snapshot. */
+    fun isScoRouteRequested(): Boolean = communicationRouteUsesSco
+
     // Callbacks
     var onMicDataCallback: ((ByteArray) -> Unit)? = null
     var onInputVolumeCallback: ((Float) -> Unit)? = null
@@ -142,6 +148,8 @@ class AudioEngine (context: Context) {
                     it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
                     it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
                 ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            communicationRouteUsesSco = selected?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                selected?.type == AudioDeviceInfo.TYPE_BLE_HEADSET
             val routed = try {
                 selected != null && audioManager.setCommunicationDevice(selected)
             } catch (_: IllegalArgumentException) {
@@ -155,6 +163,7 @@ class AudioEngine (context: Context) {
             // Before Android 12, A2DP signals a connected headset; start SCO to open its mic.
             val bluetooth = devices.any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
                 it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+            communicationRouteUsesSco = bluetooth
             @Suppress("DEPRECATION")
             if (bluetooth) audioManager.startBluetoothSco() else audioManager.stopBluetoothSco()
             @Suppress("DEPRECATION")
@@ -176,6 +185,7 @@ class AudioEngine (context: Context) {
     @SuppressLint("NewApi")
     private fun releaseCommunicationRoute() {
         communicationRouteActive = false
+        communicationRouteUsesSco = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             audioManager.clearCommunicationDevice()
         } else {

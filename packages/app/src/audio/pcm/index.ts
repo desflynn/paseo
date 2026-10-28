@@ -91,31 +91,52 @@ interface PcmOutput {
   stopPlayback(): void;
 }
 
-/** Keep voice output on the native communication engine and its echo reference. */
+/**
+ * Keep voice output on the native communication engine and its echo reference.
+ * `options.settleDelayMs` runs after the output's route is acquired; a positive
+ * return is held before the first data write, so a freshly negotiated SCO link
+ * never eats the first line. The hold counts inside the settle duration.
+ */
 export function playPcm16(
   bytes: Uint8Array,
   mimeType: string,
   signal: AbortSignal,
   output: PcmOutput,
+  options?: {
+    settleDelayMs?: () => number;
+  },
 ): Promise<number> {
   if (signal.aborted) return Promise.reject(new Error("Playback stopped"));
   const pcm = resamplePcm16(bytes, parsePcmSampleRate(mimeType) ?? 24000, 16000);
   const duration = pcm.length / 2 / 16000;
   return new Promise((resolve, reject) => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let leadInTimeout: ReturnType<typeof setTimeout> | undefined;
     const abort = () => {
       clearTimeout(timeout);
+      clearTimeout(leadInTimeout);
       output.stopPlayback();
       reject(new Error("Playback stopped"));
     };
     signal.addEventListener("abort", abort, { once: true });
     try {
       output.resumePlayback();
-      output.playPCMData(pcm);
-      timeout = setTimeout(() => {
-        signal.removeEventListener("abort", abort);
-        resolve(duration);
-      }, duration * 1000);
+      const sendData = () => {
+        output.playPCMData(pcm);
+        timeout = setTimeout(() => {
+          signal.removeEventListener("abort", abort);
+          resolve(duration);
+        }, duration * 1000);
+      };
+      const leadInMs = Math.max(0, options?.settleDelayMs?.() ?? 0);
+      if (leadInMs > 0) {
+        leadInTimeout = setTimeout(() => {
+          leadInTimeout = undefined;
+          sendData();
+        }, leadInMs);
+      } else {
+        sendData();
+      }
     } catch (error) {
       signal.removeEventListener("abort", abort);
       reject(error);

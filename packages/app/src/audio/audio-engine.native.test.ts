@@ -11,11 +11,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const nativeCalls: { name: string; args: unknown[] }[] = [];
+const nativeState = { scoRequested: false };
 const record = (name: string) => {
   const fn = (...args: unknown[]) => {
     nativeCalls.push({ name, args });
     if (name === "initialize") return true;
     if (name === "toggleRecording" || name === "startDictation") return true;
+    if (name === "isScoRouteRequested") return nativeState.scoRequested;
     return undefined;
   };
   return fn;
@@ -28,6 +30,7 @@ const fakeNative = {
   resumePlayback: record("resumePlayback"),
   stopPlayback: record("stopPlayback"),
   setPlaybackMuted: record("setPlaybackMuted"),
+  isScoRouteRequested: record("isScoRouteRequested"),
   toggleRecording: record("toggleRecording"),
   tearDown: record("tearDown"),
   getMicrophonePermissionsAsync: async () => ({ granted: true }),
@@ -98,6 +101,7 @@ const calls = (name: string) => nativeCalls.filter((c) => c.name === name);
 
 beforeEach(() => {
   nativeCalls.length = 0;
+  nativeState.scoRequested = false;
   vi.useFakeTimers();
 });
 
@@ -146,6 +150,66 @@ describe("voice-route speak (audio engine)", () => {
         .map((c) => c.args[0])
         .slice(-1),
     ).toEqual([true]);
+    await vi.advanceTimersByTimeAsync(200);
+    await played;
+  });
+});
+
+describe("SCO settle delay (first line of a speak group)", () => {
+  it("holds the first chunk 500 ms when the route requested SCO", async () => {
+    nativeState.scoRequested = true;
+    const engine = makeEngine();
+    const played = engine.play(pcmSource(pcmChunk(1600), 24000));
+    await vi.advanceTimersByTimeAsync(0);
+    // The route is acquired (resumePlayback) but no data flows until SCO settles.
+    expect(calls("resumePlayback")).toHaveLength(1);
+    expect(calls("playPCMData")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(calls("playPCMData")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls("playPCMData")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(200);
+    await played;
+  });
+
+  it("no delay on the speaker-only route", async () => {
+    nativeState.scoRequested = false;
+    const engine = makeEngine();
+    const played = engine.play(pcmSource(pcmChunk(1600), 24000));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls("playPCMData")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(200);
+    await played;
+  });
+
+  it("no delay on later chunks of the same speak group", async () => {
+    nativeState.scoRequested = true;
+    const engine = makeEngine();
+    // A speak group holds the queue from its first chunk to its last.
+    engine.beginPlaybackHold();
+    const first = engine.play(pcmSource(pcmChunk(1600), 24000));
+    await vi.advanceTimersByTimeAsync(600);
+    await first;
+    const second = engine.play(pcmSource(pcmChunk(1600), 24000));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls("playPCMData")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(200);
+    await second;
+    engine.endPlaybackHold();
+  });
+
+  it("no delay and no crash on binaries without isScoRouteRequested", async () => {
+    const legacyNative = { ...fakeNative } as Record<string, unknown>;
+    delete legacyNative.isScoRouteRequested;
+    const engine = createAudioEngine(
+      { onVolumeLevel: () => {}, onCaptureData: () => {} },
+      {
+        nativeModule: legacyNative as unknown as typeof import("@getpaseo/expo-two-way-audio"),
+      },
+    );
+    const played = engine.play(pcmSource(pcmChunk(1600), 24000));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls("playPCMData")).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(200);
     await played;
   });
