@@ -27,6 +27,12 @@ function createRecord(overrides?: Partial<StoredAgentRecord>): StoredAgentRecord
 }
 
 describe("persistence hooks", () => {
+  test("restores the stored title to a resumed agent's runtime config", () => {
+    const record = createRecord({ title: "🐨MS Joey 🟩" });
+    expect(buildConfigOverrides(record).title).toBe("🐨MS Joey 🟩");
+    expect(buildSessionConfig(record)?.title).toBe("🐨MS Joey 🟩");
+  });
+
   test("buildConfigOverrides prefers the last live mode over the creation-time mode", () => {
     const record = createRecord({
       lastModeId: "bypass",

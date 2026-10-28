@@ -14,9 +14,12 @@ if (!architectures) {
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const app = path.join(root, "packages/app");
+// Expo config variant: production replaces the store app, dogfood installs
+// beside it as "PaseoDF". Defaults to production for the shipping artifact.
+const appVariant = process.env.APP_VARIANT ?? "production";
 const env = {
   ...process.env,
-  APP_VARIANT: "production",
+  APP_VARIANT: appVariant,
   PASEO_WATCHDOG_BUILD: "1",
   PASEO_DIAGNOSTIC_BUILD_TIME: new Date().toISOString(),
   PASEO_DIAGNOSTIC_REVISION:
@@ -31,7 +34,10 @@ function run(command, args, cwd) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 run("npm", ["run", "build:app-deps"], root);
-run("npx", ["expo", "prebuild", "--platform", "android", "--no-install"], app);
+// --clean: the package id, app name and icon come from the Expo config, and
+// prebuild will not rewrite an android/ tree that already exists for another
+// variant, so a stale tree would ship the previous variant's identity.
+run("npx", ["expo", "prebuild", "--platform", "android", "--clean", "--no-install"], app);
 // Gradle does not track Metro's environment flags. Always regenerate the JS artifact
 // so a previous ordinary release cannot silently bypass the profiling renderer.
 rmSync(path.join(app, "android/app/build/generated/assets"), { recursive: true, force: true });
@@ -46,7 +52,8 @@ run(
   ],
   path.join(app, "android"),
 );
-const destination = path.join(root, `artifacts/paseo-dogfood-${target}.apk`);
+const artifactStem = appVariant === "dogfood" ? "paseo-df" : "paseo-dogfood";
+const destination = path.join(root, `artifacts/${artifactStem}-${target}.apk`);
 mkdirSync(path.dirname(destination), { recursive: true });
 copyFileSync(path.join(app, "android/app/build/outputs/apk/release/app-release.apk"), destination);
 console.log(`\nDiagnostic release APK: ${destination}\nLogs: Downloads/Paseo diagnostics\n`);

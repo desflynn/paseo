@@ -7,6 +7,7 @@ const withAndroidProfileable = require("./plugins/with-android-profileable");
 const withFdroidAutolinking = require("./plugins/with-fdroid-autolinking");
 const withPasteInput = require("./plugins/with-paste-input");
 const withAndroidScroll = require("./modules/paseo-scroll/app.plugin");
+const withAndroidVolumeKeys = require("./modules/paseo-volume-keys/app.plugin");
 const { getNativeReleaseVersion } = require("./native-release-version");
 const appVariant = process.env.APP_VARIANT ?? "production";
 const isFdroidBuild = process.env.PASEO_FDROID_BUILD === "1";
@@ -71,6 +72,7 @@ const variants = {
   production: {
     name: "Paseo",
     packageId: "sh.paseo",
+    iconBackground: "#000000",
     googleServicesFile: resolveSecretFile({
       envKey: "GOOGLE_SERVICES_FILE_PROD",
       fallbackRelativePath: "./.secrets/google-services.prod.json",
@@ -83,6 +85,7 @@ const variants = {
   development: {
     name: "Paseo Debug",
     packageId: "sh.paseo.debug",
+    iconBackground: "#000000",
     googleServicesFile: resolveSecretFile({
       envKey: "GOOGLE_SERVICES_FILE_DEBUG",
       fallbackRelativePath: "./.secrets/google-services.debug.json",
@@ -91,6 +94,16 @@ const variants = {
       envKey: "GOOGLE_SERVICE_INFO_PLIST_DEBUG",
       fallbackRelativePath: "./.secrets/GoogleService-Info.debug.plist",
     }),
+  },
+  // A locally built release that installs beside the store app instead of
+  // replacing it. Same daemon and relay; separate package and a blue icon so
+  // the two are never confused on the home screen.
+  dogfood: {
+    name: "PaseoDF",
+    packageId: "sh.paseo.df",
+    iconBackground: "#2563EB",
+    googleServicesFile: undefined,
+    googleServiceInfoPlist: undefined,
   },
 };
 
@@ -121,7 +134,7 @@ export default {
     },
     android: {
       adaptiveIcon: {
-        backgroundColor: "#000000",
+        backgroundColor: variant.iconBackground,
         foregroundImage: "./assets/images/android-icon-foreground.png",
       },
       edgeToEdgeEnabled: true,
@@ -145,6 +158,7 @@ export default {
       "expo-router",
       withPasteInput,
       withAndroidScroll,
+      withAndroidVolumeKeys,
       [withAndroidAsyncStorageSize, 64],
       ...buildProfile.cameraPlugins,
       withAndroidOptionalCamera,
@@ -190,6 +204,7 @@ export default {
       autolinkingModuleResolution: true,
     },
     extra: {
+      appVariant,
       fdroidBuild: isFdroidBuild,
       profileBuild: isProfileBuild,
       watchdogBuild: isWatchdogBuild,

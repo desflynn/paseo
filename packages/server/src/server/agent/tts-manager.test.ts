@@ -86,7 +86,7 @@ describe("TTSManager", () => {
     expect(settled).toBe(true);
   });
 
-  it("starts a single-clip report with two seconds of silence, and only that report", async () => {
+  it("starts a single-clip report with a short lead-in, and only that report", async () => {
     const manager = new TTSManager("s1", pino({ level: "silent" }), new FakeTts());
     const abort = new AbortController();
     const run = async (singleClip: boolean) => {
@@ -106,11 +106,11 @@ describe("TTSManager", () => {
       return emitted.map((m) => Buffer.from(m.payload.audio, "base64"));
     };
 
-    // 24 kHz, 16-bit mono: two seconds is 96000 bytes. FakeTts audio is "ab" per sentence.
+    // 24 kHz, 16-bit mono: the 0.4 s lead-in is 19200 bytes. FakeTts audio is "ab" per sentence.
     const [first, second] = await run(true);
-    expect(first).toHaveLength(96000 + 2);
-    expect(first.subarray(0, 96000).every((byte) => byte === 0)).toBe(true);
-    expect(first.subarray(96000).toString()).toBe("ab");
+    expect(first).toHaveLength(19200 + 2);
+    expect(first.subarray(0, 19200).every((byte) => byte === 0)).toBe(true);
+    expect(first.subarray(19200).toString()).toBe("ab");
     expect(second.toString()).toBe("ab");
 
     // A per-sentence clip (voice mode) is left as it was.
@@ -163,10 +163,10 @@ describe("TTSManager", () => {
 
     expect(emitted.map((m) => m.payload.format)).toEqual(["pcm;rate=24000", "pcm;rate=24000"]);
     const [first, second] = emitted.map((m) => Buffer.from(m.payload.audio, "base64"));
-    expect(first).toHaveLength(96000 + pcm.length);
-    expect(first.subarray(0, 96000).every((byte) => byte === 0)).toBe(true);
-    expect(first.subarray(96000).equals(pcm)).toBe(true);
-    expect(first.includes("RIFF", 96000)).toBe(false);
+    expect(first).toHaveLength(19200 + pcm.length);
+    expect(first.subarray(0, 19200).every((byte) => byte === 0)).toBe(true);
+    expect(first.subarray(19200).equals(pcm)).toBe(true);
+    expect(first.includes("RIFF", 19200)).toBe(false);
     expect(second.equals(pcm)).toBe(true);
   });
 
@@ -194,7 +194,7 @@ describe("TTSManager", () => {
     );
 
     expect(emitted[0].payload.format).toBe("pcm;rate=24000");
-    expect(Buffer.from(emitted[0].payload.audio, "base64").subarray(96000).toString()).toBe(
+    expect(Buffer.from(emitted[0].payload.audio, "base64").subarray(19200).toString()).toBe(
       "RIFF not a wav",
     );
   });

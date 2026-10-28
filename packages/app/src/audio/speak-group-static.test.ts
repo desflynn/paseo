@@ -1,12 +1,16 @@
 import { expect, test } from "vitest";
 
-import { buildAudioPlaybackSource, type BufferedAudioChunk } from "./group-playback";
+import {
+  buildAudioPlaybackSource,
+  buildChunkPlaybackSource,
+  type BufferedAudioChunk,
+} from "./group-playback";
 import { parsePcmSampleRate, pcm16LeToAudioBuffer } from "./pcm";
 
 const RATE = 24000;
 
 /** The server prepends this to chunk 0 of a grouped pcm clip (tts-manager leadInSilence). */
-const LEAD_IN_BYTES = RATE * 2 * 2;
+const LEAD_IN_BYTES = Math.round(RATE * 0.4) * 2;
 
 function pcm16FromSamples(samples: number[]): Buffer {
   const out = Buffer.alloc(samples.length * 2);
@@ -108,7 +112,7 @@ test("grouped pcm chunks reach the player sample-faithful, with no static window
   expect(channel.length).toBe(LEAD_IN_BYTES / 2 + 4 * RATE);
 
   const windows = windowAutocorrelation(channel, RATE);
-  expect(windows).toHaveLength(6); // 2s lead-in + 4 one-second segments
+  expect(windows).toHaveLength(4); // 0.4s lead-in + 4 one-second segments -> 4 whole windows
   // Silence (lead-in) has c0 == 0 → 0 by convention; every tone window must be coherent.
   for (const [index, autocorr] of windows.slice(2).entries()) {
     expect(autocorr, `segment ${index} window`).toBeGreaterThan(0.9);
@@ -136,4 +140,39 @@ test("wav-per-chunk bytes in a pcm group corrupt only at headers, never sustaine
     expect(autocorr).toBeGreaterThan(0.9);
   }
   expect(windows.length).toBe(3);
+});
+
+test("a chunk source trims the daemon lead-in to the 250 ms cap at the native rate", async () => {
+  const payload = Buffer.concat([Buffer.alloc(Math.round(RATE * 2) * 2), toneChunk(440)]);
+  const chunk: BufferedAudioChunk = {
+    chunkIndex: 0,
+    audio: payload.toString("base64"),
+    format: "pcm",
+    id: "group:0",
+  };
+
+  const source = buildChunkPlaybackSource(chunk);
+
+  // 250 ms of lead-in + one second of tone, still at 24 kHz — never resampled down.
+  // toneChunk starts at sin(0) = 0, so the tone's own first sample sits inside the
+  // zero run and is counted toward the cap.
+  const leadSamples = Math.round(RATE * 0.25);
+  expect(source.type).toBe("audio/pcm;rate=24000;bits=16");
+  expect(source.size).toBe((leadSamples + RATE - 1) * 2);
+  const channel = await decodeLikeWebEngine(source);
+  expect(channel.length).toBe(leadSamples + RATE - 1);
+});
+
+test("non-pcm chunk bytes pass through untouched", () => {
+  const wav = wavFromPcm(toneChunk(440));
+  const chunk: BufferedAudioChunk = {
+    chunkIndex: 0,
+    audio: wav.toString("base64"),
+    format: "wav",
+    id: "group:0",
+  };
+
+  const source = buildChunkPlaybackSource(chunk);
+
+  expect(source.size).toBe(wav.length);
 });

@@ -51,6 +51,7 @@
     "build": "npm run build --workspaces --if-present",
     "build:apk": "node scripts/build-apk.mjs",
     "build:apk:arm64": "node scripts/build-apk.mjs arm64",
+    "build:apk:df": "cross-env APP_VARIANT=dogfood node scripts/build-apk.mjs arm64",
     "build:highlight": "npm run build --workspace=@getpaseo/highlight",
     "build:highlight:clean": "npm run build:clean --workspace=@getpaseo/highlight",
     "build:plugin": "npm run build --workspace=@getpaseo/plugin",
@@ -122,7 +123,8 @@
     "release:promote": "npm run release:check && npm run version:all:promote && npm run release:publish && npm run release:push",
     "release:patch": "npm run release:check && npm run version:all:patch && npm run release:publish && npm run release:push",
     "release:minor": "npm run release:check && npm run version:all:minor && npm run release:publish && npm run release:push",
-    "release:major": "npm run release:check && npm run version:all:major && npm run release:publish && npm run release:push"
+    "release:major": "npm run release:check && npm run version:all:major && npm run release:publish && npm run release:push",
+    "build:all": "node scripts/build-all.mjs"
   },
   "devDependencies": {
     "@types/ws": "^8.5.14",

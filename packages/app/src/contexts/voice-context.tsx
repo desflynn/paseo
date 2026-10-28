@@ -10,6 +10,7 @@ import {
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useSessionStore } from "@/stores/session-store";
 import { createAudioEngine } from "@/audio";
+import { attachVolumeKeyMute } from "@/audio/volume-mute/volume-key-native";
 import type { AudioEngine } from "@/audio";
 import {
   createVoiceRuntime,
@@ -115,6 +116,7 @@ interface VoiceProviderProps {
 export function VoiceProvider({ children }: VoiceProviderProps) {
   const engineRef = useRef<AudioEngine | null>(null);
   const runtimeRef = useRef<VoiceRuntime | null>(null);
+  const volumeKeysDetachRef = useRef<(() => void) | null>(null);
 
   if (!engineRef.current) {
     let runtime: VoiceRuntime | null = null;
@@ -149,6 +151,7 @@ export function VoiceProvider({ children }: VoiceProviderProps) {
 
     engineRef.current = engine;
     runtimeRef.current = runtime;
+    volumeKeysDetachRef.current = attachVolumeKeyMute(engine);
   }
 
   const engine = engineRef.current;
@@ -156,6 +159,7 @@ export function VoiceProvider({ children }: VoiceProviderProps) {
 
   useEffect(() => {
     return () => {
+      volumeKeysDetachRef.current?.();
       void runtime.destroy().catch((error) => {
         console.error("[VoiceProvider] Failed to destroy voice runtime", error);
       });

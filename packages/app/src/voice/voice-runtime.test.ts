@@ -20,6 +20,9 @@ function createAudioEngineMock(): AudioEngine {
     stop: vi.fn(),
     clearQueue: vi.fn(),
     isPlaying: vi.fn().mockReturnValue(false),
+    beginPlaybackHold: vi.fn(),
+    endPlaybackHold: vi.fn(),
+    setPlaybackMuted: vi.fn(),
   };
 }
 

@@ -42,6 +42,8 @@ export function createAudioEngine(
     gain: GainNode | null;
     started: boolean;
     muted: boolean;
+    playbackMuted: boolean;
+    activeGain: GainNode | null;
   } = {
     playbackContext: null,
     captureContext: null,
@@ -51,6 +53,8 @@ export function createAudioEngine(
     gain: null,
     started: false,
     muted: false,
+    playbackMuted: false,
+    activeGain: null,
   };
 
   async function ensurePlaybackContext(): Promise<AudioContext> {
@@ -116,12 +120,19 @@ export function createAudioEngine(
     const durationSec = audioBuffer.duration;
     const source = context.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(context.destination);
+    // Volume-key mute silences the stream without pausing it; the gain rides
+    // every chunk so a mid-group unmute is heard at once.
+    const gain = context.createGain();
+    gain.gain.value = refs.playbackMuted ? 0 : 1;
+    refs.activeGain = gain;
+    source.connect(gain);
+    gain.connect(context.destination);
 
     return await new Promise<number>((resolve, reject) => {
       const abort = () => {
         source.stop();
         source.disconnect();
+        gain.disconnect();
         reject(new Error("Playback stopped"));
       };
       signal.addEventListener("abort", abort, { once: true });
@@ -130,6 +141,8 @@ export function createAudioEngine(
         () => {
           signal.removeEventListener("abort", abort);
           source.disconnect();
+          gain.disconnect();
+          if (refs.activeGain === gain) refs.activeGain = null;
           resolve(durationSec);
         },
         { once: true },
@@ -294,9 +307,18 @@ export function createAudioEngine(
       return refs.muted;
     },
 
+    setPlaybackMuted(muted: boolean) {
+      refs.playbackMuted = muted;
+      if (refs.activeGain) refs.activeGain.gain.value = muted ? 0 : 1;
+    },
+
     play: playback.play,
     stop: playback.stop,
     clearQueue: playback.clearQueue,
     isPlaying: playback.isPlaying,
+    // The browser has no OS audio session to hold; the methods exist so the
+    // shared speak-group path can call them unconditionally.
+    beginPlaybackHold: () => {},
+    endPlaybackHold: () => {},
   };
 }

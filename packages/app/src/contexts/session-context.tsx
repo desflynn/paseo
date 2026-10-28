@@ -28,7 +28,8 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
 import { getHostRuntimeStore, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { useVoiceAudioEngineOptional, useVoiceRuntimeOptional } from "@/contexts/voice-context";
-import { buildAudioPlaybackSource, type BufferedAudioChunk } from "@/audio/group-playback";
+import { buildChunkPlaybackSource } from "@/audio/group-playback";
+import { createSpeakGroupStream, type SpeakGroupStream } from "@/audio/speak-group";
 import {
   selectAgentTimelineState,
   toDaemonServerInfo,
@@ -190,9 +191,11 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   const attentionNotifiedRef = useRef<Map<string, number>>(new Map());
   const appStateRef = useRef(AppState.currentState);
   const viewedTimelineSyncRef = useRef<ViewedTimelineOwner | null>(null);
-  const audioOutputBuffersRef = useRef<Map<string, BufferedAudioChunk[]>>(new Map());
+  const speakGroupsRef = useRef<Map<string, SpeakGroupStream>>(new Map());
   const activeAudioGroupsRef = useRef<Set<string>>(new Set());
   const isAppVisible = useAppVisible();
+
+  const speakGroups = speakGroupsRef.current;
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
@@ -543,65 +546,46 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         return;
       }
 
+      // Sentences stream instead of buffering: each chunk plays as it arrives,
+      // in chunkIndex order, on one audio session held open for the whole group.
       const playbackGroupId = payload.groupId ?? payload.id;
-      const chunkIndex = payload.chunkIndex ?? 0;
-      const isFinalChunk = payload.isLastChunk ?? true;
-
-      if (!audioOutputBuffersRef.current.has(playbackGroupId)) {
-        audioOutputBuffersRef.current.set(playbackGroupId, []);
+      const shouldPlay =
+        !payload.isVoiceMode || (voiceRuntime?.shouldPlayVoiceAudio(serverId) ?? false);
+      let group = speakGroups.get(playbackGroupId);
+      if (!group) {
+        voiceAudioEngine.beginPlaybackHold();
+        activeAudioGroupsRef.current.add(playbackGroupId);
+        setIsPlayingAudio(serverId, true);
+        group = createSpeakGroupStream({
+          buildSource: buildChunkPlaybackSource,
+          play: async (source) => {
+            try {
+              return shouldPlay ? await voiceAudioEngine.play(source) : 0;
+            } catch (error) {
+              console.warn("[Session] Audio playback error:", error);
+              throw error;
+            }
+          },
+          confirm: (chunkId) =>
+            client.audioPlayed(chunkId).catch((error) => {
+              console.warn("[Session] Failed to confirm audio playback:", error);
+            }),
+          onGroupDone: () => {
+            voiceAudioEngine.endPlaybackHold();
+            speakGroups.delete(playbackGroupId);
+            activeAudioGroupsRef.current.delete(playbackGroupId);
+            setIsPlayingAudio(serverId, activeAudioGroupsRef.current.size > 0);
+          },
+        });
+        speakGroups.set(playbackGroupId, group);
       }
-
-      const bufferedChunks = audioOutputBuffersRef.current.get(playbackGroupId)!;
-      bufferedChunks.push({
-        chunkIndex,
+      group.push({
+        chunkIndex: payload.chunkIndex ?? 0,
         audio: payload.audio,
         format: payload.format,
         id: payload.id,
+        isLast: payload.isLastChunk ?? true,
       });
-
-      activeAudioGroupsRef.current.add(playbackGroupId);
-      setIsPlayingAudio(serverId, true);
-
-      if (!isFinalChunk) {
-        return;
-      }
-
-      bufferedChunks.sort((left, right) => left.chunkIndex - right.chunkIndex);
-      const chunkIds = bufferedChunks.map((chunk) => chunk.id);
-      const shouldPlay =
-        !payload.isVoiceMode || (voiceRuntime?.shouldPlayVoiceAudio(serverId) ?? false);
-      const audioBlob = buildAudioPlaybackSource(bufferedChunks);
-      function logAudioPlayedError(error: unknown): void {
-        console.warn("[Session] Failed to confirm audio playback:", error);
-      }
-      const confirmAudioPlayed = async () => {
-        await Promise.all(
-          chunkIds.map((chunkId) => client.audioPlayed(chunkId).catch(logAudioPlayedError)),
-        );
-      };
-
-      let startedVoicePlayback = false;
-      try {
-        if (shouldPlay) {
-          if (payload.isVoiceMode) {
-            startedVoicePlayback = true;
-            voiceRuntime?.onAssistantAudioStarted(serverId);
-          }
-          await voiceAudioEngine.play(audioBlob);
-        }
-        await confirmAudioPlayed();
-      } catch (error) {
-        console.error("[Session] Audio playback error:", error);
-        await confirmAudioPlayed();
-      } finally {
-        audioOutputBuffersRef.current.delete(playbackGroupId);
-        activeAudioGroupsRef.current.delete(playbackGroupId);
-        setIsPlayingAudio(serverId, activeAudioGroupsRef.current.size > 0);
-
-        if (startedVoicePlayback) {
-          voiceRuntime?.onAssistantAudioFinished(serverId);
-        }
-      }
     });
 
     const unsubActivity = client.on("activity_log", (message) => {
@@ -643,6 +627,10 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     });
 
     return () => {
+      // Settle any streaming groups so the daemon's chunk accounting never hangs.
+      for (const group of speakGroups.values()) {
+        group.abort();
+      }
       void feeds
         .release()
         .catch((error) => console.warn("[Session] Failed to release feeds", error));
@@ -674,6 +662,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     toast,
     voiceRuntime,
     voiceAudioEngine,
+    speakGroups,
   ]);
 
   const _cancelAgentRun = useCallback(

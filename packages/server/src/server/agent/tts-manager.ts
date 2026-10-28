@@ -37,9 +37,10 @@ type PreparedSegmentResult =
   | { kind: "aborted" }
   | { kind: "error"; error: unknown };
 
-// A phone or car needs a moment to route audio to Bluetooth; without a lead-in it clips the
-// first words of a report.
-const LEAD_IN_SILENCE_SECONDS = 2;
+// Speak plays on the media path (USAGE_MEDIA, A2DP), so this only has to cover an A2DP route
+// settle rather than the slow SCO link-up a voice-communication session needed. Without any
+// lead-in a car still swallows the first words of a report.
+const LEAD_IN_SILENCE_SECONDS = 0.4;
 const DEFAULT_PCM_SAMPLE_RATE = 24000;
 
 /** Silence for the front of a PCM clip (16-bit mono); nothing for any other format. */
@@ -324,6 +325,10 @@ export class TTSManager {
         resolveMs,
         synthMs: Date.now() - synthStart,
         chars: segment.text.length,
+        // The only record of which voice actually played. Without it a wrong
+        // voice, or a seat that resolved to the fallback, is undiagnosable
+        // from the logs; a null here means the provider default was used.
+        voice: voice ?? null,
       },
       `TTS segment ${segment.index} synthesized (resolve=${resolveMs}ms, synth=${Date.now() - synthStart}ms, ${segment.text.length} chars)`,
     );

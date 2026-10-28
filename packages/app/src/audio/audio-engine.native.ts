@@ -9,7 +9,8 @@ import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import { File, Paths } from "expo-file-system";
 import { createPlaybackQueue } from "./playback";
 import { playFile } from "./file-playback";
-import { playPcm16 } from "./pcm";
+import { playPcm16, parsePcmSampleRate } from "./pcm";
+import { pcm16ToWav } from "./pcm/wav";
 
 export function createAudioEngine(
   callbacks: AudioEngineCallbacks,
@@ -22,10 +23,14 @@ export function createAudioEngine(
     captureActive: boolean;
     muted: boolean;
     destroyed: boolean;
+    playbackMuted: boolean;
+    activePlayer: { volume?: number } | null;
   } = {
     initialized: false,
     captureActive: false,
     muted: false,
+    playbackMuted: false,
+    activePlayer: null,
     destroyed: false,
   };
 
@@ -64,6 +69,8 @@ export function createAudioEngine(
       const wasCaptureActive = refs.captureActive;
       refs.captureActive = false;
       refs.muted = false;
+      refs.playbackMuted = false;
+      refs.activePlayer = null;
       callbacks.onVolumeLevel(0);
       if (wasCaptureActive) {
         callbacks.onInterruption?.();
@@ -92,7 +99,7 @@ export function createAudioEngine(
     if (!refs.initialized || refs.destroyed) {
       return;
     }
-    if (refs.captureActive || playback.isPlaying()) {
+    if (refs.captureActive || playback.isPlaying() || playback.isHeld()) {
       return;
     }
     // The wrapper no-ops on binaries whose native module predates this function.
@@ -113,12 +120,26 @@ export function createAudioEngine(
 
   let nextFileId = 0;
   async function playAudio(audio: AudioPlaybackSource, signal: AbortSignal): Promise<number> {
-    const bytes = new Uint8Array(await audio.arrayBuffer());
-    if (signal.aborted) throw new Error("Playback stopped");
-    if (audio.type.startsWith("audio/pcm")) {
+    // Capture owns the duplex engine and its 16 kHz echo reference, so audio
+    // spoken while the mic is live still goes through it. Standalone speak must
+    // not: that engine runs MODE_IN_COMMUNICATION with USAGE_VOICE_COMMUNICATION,
+    // which a connected car routes over narrowband SCO rather than A2DP, holds
+    // audio focus after playback ends, and only accepts 16 kHz.
+    if (audio.type.startsWith("audio/pcm") && refs.captureActive) {
+      const captured = new Uint8Array(await audio.arrayBuffer());
+      if (signal.aborted) throw new Error("Playback stopped");
       await ensureInitialized();
-      return playPcm16(bytes, audio.type, signal, native);
+      return playPcm16(captured, audio.type, signal, native);
     }
+    const isPcm = audio.type.startsWith("audio/pcm");
+    const type = isPcm ? "audio/wav" : audio.type;
+    const bytes = isPcm
+      ? pcm16ToWav(
+          new Uint8Array(await audio.arrayBuffer()),
+          parsePcmSampleRate(audio.type) ?? 24000,
+        )
+      : new Uint8Array(await audio.arrayBuffer());
+    if (signal.aborted) throw new Error("Playback stopped");
     // Capture owns its audio session while active. File playback alone must not
     // initialize the microphone or the native two-way engine.
     if (!refs.captureActive) {
@@ -142,7 +163,7 @@ export function createAudioEngine(
         "audio/aac": "aac",
         "audio/ogg": "ogg",
         "audio/flac": "flac",
-      }[audio.type.split(";")[0].trim()] ?? "audio";
+      }[type.split(";")[0].trim()] ?? "audio";
     const file = new File(Paths.cache, `paseo-audio-${Date.now()}-${nextFileId++}.${extension}`);
     try {
       file.write(bytes);
@@ -150,7 +171,15 @@ export function createAudioEngine(
         updateInterval: 100,
         keepAudioSessionActive: refs.captureActive,
       });
-      return await playFile(player, signal);
+      // A chunk of a muted speak group starts silent; unmuting mid-chunk
+      // flips the active player's volume through setPlaybackMuted.
+      player.volume = refs.playbackMuted ? 0 : 1;
+      refs.activePlayer = player;
+      try {
+        return await playFile(player, signal);
+      } finally {
+        if (refs.activePlayer === player) refs.activePlayer = null;
+      }
     } finally {
       if (file.exists) file.delete();
     }
@@ -214,6 +243,8 @@ export function createAudioEngine(
       }
       refs.captureActive = false;
       refs.muted = false;
+      refs.playbackMuted = false;
+      refs.activePlayer = null;
       callbacks.onVolumeLevel(0);
       callbacks.onCaptureAvailabilityChange?.(true);
       releaseSessionIfIdle();
@@ -231,9 +262,17 @@ export function createAudioEngine(
       return refs.muted;
     },
 
+    setPlaybackMuted(muted: boolean) {
+      refs.playbackMuted = muted;
+      const player = refs.activePlayer;
+      if (player) player.volume = muted ? 0 : 1;
+    },
+
     play: playback.play,
     stop: playback.stop,
     clearQueue: playback.clearQueue,
     isPlaying: playback.isPlaying,
+    beginPlaybackHold: playback.hold,
+    endPlaybackHold: playback.releaseHold,
   };
 }

@@ -1,4 +1,6 @@
 /** One queue for voice and plugin audio, including cancellation while loading. */
+import { playbackActiveStore } from "./playback-active-store";
+
 export function createPlaybackQueue<Source>(
   start: (source: Source, signal: AbortSignal) => Promise<number>,
   onIdle: () => void = () => {},
@@ -13,15 +15,22 @@ export function createPlaybackQueue<Source>(
   const pending: Item[] = [];
   let active: Item | null = null;
   let destroyed = false;
+  // While held, an empty queue does not fire onIdle: a speak group keeps the OS
+  // audio session open from its first chunk until its last chunk has played.
+  let holdCount = 0;
 
   async function drain() {
     if (active) return;
     const item = pending.shift();
     if (!item) {
-      onIdle();
+      if (holdCount === 0) {
+        playbackActiveStore.setActive(false);
+        onIdle();
+      }
       return;
     }
     active = item;
+    playbackActiveStore.setActive(true);
     try {
       if (item.controller.signal.aborted) throw new Error("Playback stopped");
       item.resolve(await start(item.source, item.controller.signal));
@@ -65,6 +74,17 @@ export function createPlaybackQueue<Source>(
     stop() {
       active?.controller.abort();
     },
+    hold() {
+      holdCount += 1;
+    },
+    releaseHold() {
+      holdCount = Math.max(0, holdCount - 1);
+      if (holdCount === 0 && !active && pending.length === 0) {
+        playbackActiveStore.setActive(false);
+        onIdle();
+      }
+    },
+    isHeld: () => holdCount > 0,
     clearQueue() {
       for (const item of pending.splice(0)) {
         item.release();
