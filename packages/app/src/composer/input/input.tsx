@@ -54,7 +54,7 @@ import {
 import type { ComposerAttachment } from "@/attachments/types";
 import type { ImageAttachment, MessagePayload, TextReplacement } from "@/composer/types";
 import { focusWithRetries } from "@/utils/web-focus";
-import { AUTO_SEND_DELAY_MS, resolvePasteAutoSend } from "./paste-send";
+import { AUTO_SEND_DELAY_MS, diffTextInputChange, resolvePasteAutoSend } from "./paste-send";
 import { playbackActiveStore } from "@/audio/playback-active-store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Shortcut } from "@/components/ui/shortcut";
@@ -647,7 +647,6 @@ interface ComposerTextSurfaceProps {
   scrollEnabled: boolean;
   autoFocus: boolean;
   onKeyPress: ((event: WebTextInputKeyPressEvent) => void) | undefined;
-  onTextInput: EditingTextInputProps["onTextInput"];
   onSelectionChange: (event: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => void;
   onPasteImages: ((files: readonly NativePastedFile[]) => void) | undefined;
   onPasteError: (message: string) => void;
@@ -717,7 +716,6 @@ function ComposerTextSurface(props: ComposerTextSurfaceProps): React.ReactElemen
         scrollEnabled={props.scrollEnabled}
         editable={props.editable}
         onKeyPress={props.onKeyPress}
-        onTextInput={props.onTextInput}
         onSelectionChange={props.onSelectionChange}
         onPasteImages={props.onPasteImages}
         onPasteError={props.onPasteError}
@@ -1768,6 +1766,10 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
 
     const [pasteSendArmed, setPasteSendArmed] = useState(false);
     const pasteSendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pasteSendPrevValueRef = useRef(value);
+    useEffect(() => {
+      pasteSendPrevValueRef.current = valueRef.current;
+    }, [value, textReplacement.key]);
     useEffect(
       () => () => {
         if (pasteSendTimerRef.current) clearTimeout(pasteSendTimerRef.current);
@@ -1783,29 +1785,6 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         return !armed;
       });
     }, []);
-    const handleTextInputSegment = useCallback(
-      (event: Parameters<NonNullable<EditingTextInputProps["onTextInput"]>>[0]) => {
-        const segment = event.nativeEvent;
-        if (
-          !resolvePasteAutoSend({
-            armed: pasteSendArmed,
-            event: {
-              text: segment.text,
-              previousText: segment.previousText ?? "",
-              range: segment.range ?? { start: 0, end: 0 },
-            },
-          })
-        ) {
-          return;
-        }
-        if (pasteSendTimerRef.current) clearTimeout(pasteSendTimerRef.current);
-        pasteSendTimerRef.current = setTimeout(() => {
-          pasteSendTimerRef.current = null;
-          handleDefaultSendAction();
-        }, AUTO_SEND_DELAY_MS);
-      },
-      [pasteSendArmed, handleDefaultSendAction],
-    );
 
     const handleAlternateSendAction = useCallback(() => {
       runAlternateSendAction({
@@ -1926,12 +1905,37 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
 
     const handleInputChange = useCallback(
       (nextValue: string) => {
+        // Android never emits onTextInput, so the paste detector reads the change itself:
+        // one multi-character insertion between two change events is a paste. The ref is
+        // re-synced whenever the controlled value moves outside the change path (draft
+        // hydration, clear-after-send), so external replacements never masquerade as pastes.
+        const segment = diffTextInputChange(pasteSendPrevValueRef.current, nextValue);
+        pasteSendPrevValueRef.current = nextValue;
+        if (
+          segment &&
+          resolvePasteAutoSend({
+            armed: pasteSendArmed,
+            event: segment,
+          })
+        ) {
+          if (pasteSendTimerRef.current) clearTimeout(pasteSendTimerRef.current);
+          pasteSendTimerRef.current = setTimeout(() => {
+            pasteSendTimerRef.current = null;
+            handleDefaultSendAction();
+          }, AUTO_SEND_DELAY_MS);
+        }
         updateComposerHeightForText?.(valueRef.current, nextValue);
         valueRef.current = nextValue;
         updateLiveTextPresence(nextValue);
         onChangeText(nextValue);
       },
-      [onChangeText, updateComposerHeightForText, updateLiveTextPresence],
+      [
+        onChangeText,
+        updateComposerHeightForText,
+        updateLiveTextPresence,
+        pasteSendArmed,
+        handleDefaultSendAction,
+      ],
     );
 
     const handleInputFocus = useCallback(() => {
@@ -2121,7 +2125,6 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
             scrollEnabled={isComposerScrollEnabled}
             autoFocus={false}
             onKeyPress={shouldHandleWebKeyPress ? handleDesktopKeyPress : undefined}
-            onTextInput={handleTextInputSegment}
             onSelectionChange={handleSelectionChange}
             onPasteImages={onPasteImages}
             onPasteError={handlePasteError}
@@ -2154,7 +2157,6 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         isComposerScrollEnabled,
         shouldHandleWebKeyPress,
         handleDesktopKeyPress,
-        handleTextInputSegment,
         handleSelectionChange,
         onPasteImages,
         handlePasteError,

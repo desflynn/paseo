@@ -1,5 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { isPasteInsertion, resolvePasteAutoSend, AUTO_SEND_DELAY_MS } from "./paste-send";
+import {
+  diffTextInputChange,
+  isPasteInsertion,
+  resolvePasteAutoSend,
+  AUTO_SEND_DELAY_MS,
+} from "./paste-send";
+
+describe("diffTextInputChange", () => {
+  it("sees an appended multi-word phrase as one collapsed insertion", () => {
+    expect(diffTextInputChange("", "please send this now")).toEqual({
+      text: "please send this now",
+      previousText: "",
+      range: { start: 0, end: 0 },
+    });
+  });
+
+  it("sees a single appended character as typing", () => {
+    const event = diffTextInputChange("abc", "abch");
+    expect(event?.text).toBe("h");
+    expect(isPasteInsertion(event!)).toBe(false);
+  });
+
+  it("sees an autocorrect swap as a short replacement, not a paste", () => {
+    const event = diffTextInputChange("teh", "the");
+    expect(isPasteInsertion(event!)).toBe(false);
+  });
+
+  it("sees a multi-word paste over selected text as a paste", () => {
+    const event = diffTextInputChange("old selected words", "new pasted words");
+    expect(isPasteInsertion(event!)).toBe(true);
+  });
+
+  it("returns null when nothing changed", () => {
+    expect(diffTextInputChange("same", "same")).toBeNull();
+  });
+});
 
 describe("isPasteInsertion", () => {
   it("treats a single multi-character insertion as a paste", () => {

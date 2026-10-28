@@ -1,4 +1,4 @@
-import type { NativeSyntheticEvent, TextInputProps } from "react-native";
+import type { TextInputProps } from "react-native";
 import type { NativePastedFile } from "@/composer/native-pasted-image";
 
 /** Stable for the mounted editor lifetime; reset() owns any inner input replacement. */
@@ -23,12 +23,4 @@ export interface EditingTextInputProps extends Omit<
   onPasteImages?: (files: readonly NativePastedFile[]) => void;
   onPasteError?: (message: string) => void;
   variant?: "default" | "bottom-sheet";
-  /** Fires once per text-segment event; a paste lands as one multi-character event. */
-  onTextInput?: (
-    event: NativeSyntheticEvent<{
-      text: string;
-      previousText?: string;
-      range?: { start: number; end: number };
-    }>,
-  ) => void;
 }
