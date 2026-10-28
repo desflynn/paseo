@@ -38,6 +38,11 @@ class ExpoTwoWayAudioModule : Module() {
              null
          }
 
+         Function("setPlaybackMuted") { muted: Boolean ->
+             audioEngine?.setPlaybackMuted(muted)
+             null
+         }
+
          Function("isRecording") {
              audioEngine?.isRecording ?: false
          }

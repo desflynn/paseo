@@ -84,6 +84,44 @@ test("voice PCM retains its native output and 16 kHz samples", async () => {
   expect(duration).toBe(3 / 16000);
 });
 
+test("24 kHz voice PCM resamples to 16 kHz with interpolation, not decimation", async () => {
+  // 0.25 s of a 440 Hz sine at half-scale: interpolation must keep the tone
+  // (zero crossings ~220) and its amplitude; naive decimation would alias both.
+  const inputRate = 24000;
+  const samples = inputRate / 4;
+  const pcm = new Uint8Array(samples * 2);
+  for (let i = 0; i < samples; i++) {
+    const value = Math.round(Math.sin((2 * Math.PI * 440 * i) / inputRate) * 16000);
+    pcm[i * 2] = value & 0xff;
+    pcm[i * 2 + 1] = (value >> 8) & 0xff;
+  }
+  let written: Uint8Array | undefined;
+  await playPcm16(pcm, "audio/pcm;rate=24000;bits=16", new AbortController().signal, {
+    resumePlayback() {},
+    playPCMData(bytes) {
+      written = bytes;
+    },
+    stopPlayback() {},
+  });
+  expect(written).toBeDefined();
+  const out = written!;
+  expect(out.length).toBe(4000 * 2); // 0.25 s at the voice channel's 16 kHz
+  const amplitudes: number[] = [];
+  let crossings = 0;
+  let previous = 0;
+  for (let i = 0; i < out.length / 2; i++) {
+    const value = (out[i * 2 + 1] << 8) | out[i * 2];
+    const signed = value & 0x8000 ? value - 0x10000 : value;
+    if ((previous < 0 && signed >= 0) || (previous > 0 && signed <= 0)) crossings += 1;
+    previous = signed;
+    amplitudes.push(Math.abs(signed));
+  }
+  expect(Math.abs(crossings - 220)).toBeLessThanOrEqual(4); // tone preserved
+  const peak = Math.max(...amplitudes);
+  expect(peak).toBeGreaterThan(15000); // amplitude preserved within ~6%
+  expect(peak).toBeLessThanOrEqual(16000);
+});
+
 test("voice PCM cancellation stops native output and rejects", async () => {
   let stopped = false;
   const owner = new AbortController();

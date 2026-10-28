@@ -208,6 +208,16 @@ class AudioEngine (context: Context) {
     }
 
     /**
+     * Speak ducking: silence the voice track without pausing it, so a muted
+     * chunk keeps its place on the SCO stream and unmuting is instant.
+     */
+    fun setPlaybackMuted(muted: Boolean) {
+        if (::audioTrack.isInitialized) {
+            audioTrack.volume = if (muted) 0.0F else 1.0F
+        }
+    }
+
+    /**
      * Take the audio session back before playing, mirroring iOS `activateAudioSessionIfNeeded()`.
      *
      * `releaseAudioSession()` abandons focus and pauses the track once we go idle, so a playback

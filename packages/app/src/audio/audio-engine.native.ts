@@ -9,14 +9,16 @@ import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import { File, Paths } from "expo-file-system";
 import { createPlaybackQueue } from "./playback";
 import { playFile } from "./file-playback";
-import { playPcm16, parsePcmSampleRate } from "./pcm";
-import { pcm16ToWav } from "./pcm/wav";
+import { playPcm16 } from "./pcm";
 
 export function createAudioEngine(
   callbacks: AudioEngineCallbacks,
-  options?: AudioEngineOptions,
+  options?: AudioEngineOptions & {
+    /** Test seam: the duplex-engine native module. */
+    nativeModule?: typeof import("@getpaseo/expo-two-way-audio");
+  },
 ): AudioEngine {
-  const native = require("@getpaseo/expo-two-way-audio");
+  const native = options?.nativeModule ?? require("@getpaseo/expo-two-way-audio");
 
   const refs: {
     initialized: boolean;
@@ -24,12 +26,14 @@ export function createAudioEngine(
     muted: boolean;
     destroyed: boolean;
     playbackMuted: boolean;
+    duplexPlaying: boolean;
     activePlayer: { volume?: number } | null;
   } = {
     initialized: false,
     captureActive: false,
     muted: false,
     playbackMuted: false,
+    duplexPlaying: false,
     activePlayer: null,
     destroyed: false,
   };
@@ -120,25 +124,30 @@ export function createAudioEngine(
 
   let nextFileId = 0;
   async function playAudio(audio: AudioPlaybackSource, signal: AbortSignal): Promise<number> {
-    // Capture owns the duplex engine and its 16 kHz echo reference, so audio
-    // spoken while the mic is live still goes through it. Standalone speak must
-    // not: that engine runs MODE_IN_COMMUNICATION with USAGE_VOICE_COMMUNICATION,
-    // which a connected car routes over narrowband SCO rather than A2DP, holds
-    // audio focus after playback ends, and only accepts 16 kHz.
-    if (audio.type.startsWith("audio/pcm") && refs.captureActive) {
+    // Speak plays on the phone-call route: the duplex engine's
+    // USAGE_VOICE_COMMUNICATION + CONTENT_TYPE_SPEECH track runs
+    // MODE_IN_COMMUNICATION with SCO routing held for the speak group and
+    // released after, so a connected car plays it over any head-unit source
+    // (Des's ruling, 28 Oct — the media route was inaudible unless the head
+    // unit sat on BT Media). TTS stays 24 kHz; playPcm16 resamples to the
+    // voice channel's 16 kHz with interpolation.
+    if (audio.type.startsWith("audio/pcm")) {
       const captured = new Uint8Array(await audio.arrayBuffer());
       if (signal.aborted) throw new Error("Playback stopped");
       await ensureInitialized();
-      return playPcm16(captured, audio.type, signal, native);
+      // A chunk of a muted speak group starts on a silent track; unmuting
+      // mid-chunk flips the duplex track through setPlaybackMuted.
+      if (refs.playbackMuted) native.setPlaybackMuted(true);
+      refs.duplexPlaying = true;
+      try {
+        return await playPcm16(captured, audio.type, signal, native);
+      } finally {
+        refs.duplexPlaying = false;
+      }
     }
-    const isPcm = audio.type.startsWith("audio/pcm");
-    const type = isPcm ? "audio/wav" : audio.type;
-    const bytes = isPcm
-      ? pcm16ToWav(
-          new Uint8Array(await audio.arrayBuffer()),
-          parsePcmSampleRate(audio.type) ?? 24000,
-        )
-      : new Uint8Array(await audio.arrayBuffer());
+    if (signal.aborted) throw new Error("Playback stopped");
+    const type = audio.type;
+    const bytes = new Uint8Array(await audio.arrayBuffer());
     if (signal.aborted) throw new Error("Playback stopped");
     // Capture owns its audio session while active. File playback alone must not
     // initialize the microphone or the native two-way engine.
@@ -268,6 +277,11 @@ export function createAudioEngine(
 
     setPlaybackMuted(muted: boolean) {
       refs.playbackMuted = muted;
+      if (refs.duplexPlaying) {
+        // The wrapper no-ops on binaries whose native module predates this function.
+        native.setPlaybackMuted(muted);
+        return;
+      }
       const player = refs.activePlayer;
       if (player) player.volume = muted ? 0 : 1;
     },

@@ -45,6 +45,20 @@ export function releaseAudioSession() {
   return ExpoTwoWayAudioModule.releaseAudioSession();
 }
 
+/**
+ * Silence or restore voice playback without pausing the track (speak ducking:
+ * a muted chunk keeps its place on the SCO stream, unmuting is instant).
+ */
+export function setPlaybackMuted(muted: boolean) {
+  // COMPAT(setPlaybackMuted): added after v0.11.2. An OTA JS update can land on
+  // an older binary whose native module lacks this function, so probe the native
+  // object rather than this wrapper (which always exists).
+  if (typeof ExpoTwoWayAudioModule.setPlaybackMuted !== "function") {
+    return;
+  }
+  return ExpoTwoWayAudioModule.setPlaybackMuted(muted);
+}
+
 export function tearDown() {
   return ExpoTwoWayAudioModule.tearDown();
 }
