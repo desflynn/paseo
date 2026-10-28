@@ -213,7 +213,9 @@ class AudioEngine (context: Context) {
      */
     fun setPlaybackMuted(muted: Boolean) {
         if (::audioTrack.isInitialized) {
-            audioTrack.volume = if (muted) 0.0F else 1.0F
+            // AudioTrack exposes no volume getter, so Kotlin cannot synthesize a
+            // `volume` property — the setter is called directly.
+            audioTrack.setVolume(if (muted) 0.0F else 1.0F)
         }
     }
 
