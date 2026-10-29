@@ -149,13 +149,18 @@ export function createAudioEngine(
       refs.duplexPlaying = true;
       try {
         return await playPcm16(captured, audio.type, signal, native, {
-          settleDelayMs: () => {
+          settleDelayMs: async () => {
             // A capture-held route was never released, so SCO is long settled;
             // only the first chunk after a real idle release waits. Reading the
             // route's SCO state is a snapshot, not Bluetooth event keying.
             const fresh = refs.duplexGroupFresh && !refs.captureActive;
             refs.duplexGroupFresh = false;
-            return fresh && (native.isScoRouteRequested?.() ?? false) ? SCO_SETTLE_DELAY_MS : 0;
+            if (!fresh) return 0;
+            const sco =
+              typeof native.isScoRouteRequested === "function"
+                ? await native.isScoRouteRequested()
+                : false;
+            return sco ? SCO_SETTLE_DELAY_MS : 0;
           },
         });
       } finally {

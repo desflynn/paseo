@@ -48,15 +48,17 @@ export function releaseAudioSession() {
 /**
  * Silence or restore voice playback without pausing the track (speak ducking:
  * a muted chunk keeps its place on the SCO stream, unmuting is instant).
+ * Async: the native binding resolves through a Promise, so nothing reified
+ * rides the release-minifier path.
  */
-export function setPlaybackMuted(muted: boolean) {
+export async function setPlaybackMuted(muted: boolean): Promise<void> {
   // COMPAT(setPlaybackMuted): added after v0.11.2. An OTA JS update can land on
   // an older binary whose native module lacks this function, so probe the native
   // object rather than this wrapper (which always exists).
   if (typeof ExpoTwoWayAudioModule.setPlaybackMuted !== "function") {
     return;
   }
-  return ExpoTwoWayAudioModule.setPlaybackMuted(muted);
+  await ExpoTwoWayAudioModule.setPlaybackMuted(muted);
 }
 
 /**
@@ -64,14 +66,14 @@ export function setPlaybackMuted(muted: boolean) {
  * (a snapshot read, not Bluetooth event keying). The first line of a speak
  * group waits for SCO to settle.
  */
-export function isScoRouteRequested(): boolean {
+export async function isScoRouteRequested(): Promise<boolean> {
   // COMPAT(isScoRouteRequested): added after v0.11.2. An OTA JS update can land
   // on an older binary whose native module lacks this function, so probe the
   // native object rather than this wrapper (which always exists).
   if (typeof ExpoTwoWayAudioModule.isScoRouteRequested !== "function") {
     return false;
   }
-  return ExpoTwoWayAudioModule.isScoRouteRequested();
+  return ((await ExpoTwoWayAudioModule.isScoRouteRequested()) as boolean) ?? false;
 }
 
 export function tearDown() {

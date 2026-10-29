@@ -94,21 +94,27 @@ interface PcmOutput {
 /**
  * Keep voice output on the native communication engine and its echo reference.
  * `options.settleDelayMs` runs after the output's route is acquired; a positive
- * return is held before the first data write, so a freshly negotiated SCO link
- * never eats the first line. The hold counts inside the settle duration.
+ * awaited return is held before the first data write, so a freshly negotiated
+ * SCO link never eats the first line. The hold counts inside the settle duration.
  */
-export function playPcm16(
+export async function playPcm16(
   bytes: Uint8Array,
   mimeType: string,
   signal: AbortSignal,
   output: PcmOutput,
   options?: {
-    settleDelayMs?: () => number;
+    settleDelayMs?: () => number | Promise<number>;
   },
 ): Promise<number> {
   if (signal.aborted) return Promise.reject(new Error("Playback stopped"));
   const pcm = resamplePcm16(bytes, parsePcmSampleRate(mimeType) ?? 24000, 16000);
   const duration = pcm.length / 2 / 16000;
+  output.resumePlayback();
+  const leadInMs = Math.max(0, (await options?.settleDelayMs?.()) ?? 0);
+  if (signal.aborted) {
+    output.stopPlayback();
+    throw new Error("Playback stopped");
+  }
   return new Promise((resolve, reject) => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let leadInTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -120,7 +126,6 @@ export function playPcm16(
     };
     signal.addEventListener("abort", abort, { once: true });
     try {
-      output.resumePlayback();
       const sendData = () => {
         output.playPCMData(pcm);
         timeout = setTimeout(() => {
@@ -128,7 +133,6 @@ export function playPcm16(
           resolve(duration);
         }, duration * 1000);
       };
-      const leadInMs = Math.max(0, options?.settleDelayMs?.() ?? 0);
       if (leadInMs > 0) {
         leadInTimeout = setTimeout(() => {
           leadInTimeout = undefined;

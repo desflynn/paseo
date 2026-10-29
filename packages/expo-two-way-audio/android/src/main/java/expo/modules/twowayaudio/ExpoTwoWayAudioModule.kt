@@ -38,13 +38,14 @@ class ExpoTwoWayAudioModule : Module() {
              null
          }
 
-         Function("setPlaybackMuted") { muted: Boolean ->
+         AsyncFunction("setPlaybackMuted") { muted: Boolean, promise: Promise ->
+             // AsyncFunction with plain parameters: nothing reified for R8 to break.
              audioEngine?.setPlaybackMuted(muted)
-             null
+             promise.resolve(null)
          }
 
-         Function("isScoRouteRequested") {
-             audioEngine?.isScoRouteRequested() ?: false
+         AsyncFunction("isScoRouteRequested") { promise: Promise ->
+             promise.resolve(audioEngine?.isScoRouteRequested() ?: false)
          }
 
          Function("isRecording") {
